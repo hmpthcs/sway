@@ -767,8 +767,12 @@ static void render_containers_linear(struct sway_output *output,
 			}
 
 			if (state->border == B_NORMAL) {
-				render_titlebar(output, damage, child, floor(state->x),
-						floor(state->y), state->width, colors,
+				int y = state->y;
+				if (config->titlebar_position == TITLEBAR_BOTTOM) {
+					y += state->height - container_titlebar_height();
+				}
+				render_titlebar(output, damage, child, floor(state->x), floor(y),
+						state->width, colors,
 						title_texture, marks_texture);
 			} else if (state->border == B_PIXEL) {
 				render_top_border(output, damage, child, colors);
@@ -833,8 +837,11 @@ static void render_containers_tabbed(struct sway_output *output,
 		if (i == parent->children->length - 1) {
 			tab_width = parent->box.width - tab_width * i;
 		}
-
-		render_titlebar(output, damage, child, x, parent->box.y, tab_width,
+		int y = parent->box.y;
+		if (config->titlebar_position == TITLEBAR_BOTTOM) {
+			y += parent->box.height - container_titlebar_height();
+		}
+		render_titlebar(output, damage, child, x, y, tab_width,
 				colors, title_texture, marks_texture);
 
 		if (child == current) {
@@ -867,6 +874,7 @@ static void render_containers_stacked(struct sway_output *output,
 	struct sway_container *current = parent->active_child;
 	struct border_colors *current_colors = &config->border_colors.unfocused;
 	size_t titlebar_height = container_titlebar_height();
+	bool titlebar_is_on_top = config->titlebar_position == TITLEBAR_TOP;
 
 	// Render titles
 	for (int i = 0; i < parent->children->length; ++i) {
@@ -897,9 +905,13 @@ static void render_containers_stacked(struct sway_output *output,
 			marks_texture = child->marks_unfocused;
 		}
 
-		int y = parent->box.y + titlebar_height * i;
-		render_titlebar(output, damage, child, parent->box.x, y,
-				parent->box.width, colors, title_texture, marks_texture);
+		int titlebar_y = parent->box.y + titlebar_height * i;
+		if (!titlebar_is_on_top) {
+			titlebar_y = parent->box.height - titlebar_height * (parent->children->length - i) - (child->pending.border_thickness * child->pending.border_bottom);
+		}
+		render_titlebar(output, damage, child, parent->box.x,
+				titlebar_y, parent->box.width, colors, title_texture,
+			   	marks_texture);
 
 		if (child == current) {
 			current_colors = colors;
@@ -1002,8 +1014,12 @@ static void render_floating_container(struct sway_output *soutput,
 		}
 
 		if (con->current.border == B_NORMAL) {
+			int titlebar_y = con->current.y;
+			if (config->titlebar_position == TITLEBAR_BOTTOM) {
+				titlebar_y += con->current.height - container_titlebar_height();
+			}
 			render_titlebar(soutput, damage, con, floor(con->current.x),
-					floor(con->current.y), con->current.width, colors,
+					floor(titlebar_y), con->current.width, colors,
 					title_texture, marks_texture);
 		} else if (con->current.border == B_PIXEL) {
 			render_top_border(soutput, damage, con, colors);
