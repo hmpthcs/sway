@@ -400,21 +400,6 @@ static void render_view(struct sway_output *output, pixman_region32_t *damage,
 		scale_box(&box, output_scale);
 		render_rect(output, damage, &box, color);
 	}
-
-	if (state->border_bottom) {
-		if (!container_is_current_floating(con) && siblings->length == 1 && layout == L_VERT) {
-			memcpy(&color, colors->indicator, sizeof(float) * 4);
-		} else {
-			memcpy(&color, colors->child_border, sizeof(float) * 4);
-		}
-		premultiply_alpha(color, con->alpha);
-		box.x = floor(state->x);
-		box.y = floor(state->content_y + state->content_height);
-		box.width = state->width;
-		box.height = state->border_thickness;
-		scale_box(&box, output_scale);
-		render_rect(output, damage, &box, color);
-	}
 }
 
 /**
@@ -702,6 +687,38 @@ static void render_top_border(struct sway_output *output,
 	render_rect(output, output_damage, &box, color);
 }
 
+/**
+ * Render the bottom border line for a view using "border pixel".
+ */
+static void render_bottom_border(struct sway_output *output,
+		pixman_region32_t *output_damage, struct sway_container *con,
+		struct border_colors *colors) {
+	struct sway_container_state *state = &con->current;
+	if (!state->border_bottom) {
+		return;
+	}
+	struct wlr_box box;
+	float color[4];
+	float output_scale = output->wlr_output->scale;
+
+	list_t *siblings = container_get_current_siblings(con);
+	enum sway_container_layout layout =
+		container_current_parent_layout(con);
+
+	if (!container_is_current_floating(con) && siblings->length == 1 && layout == L_VERT) {
+		memcpy(&color, colors->indicator, sizeof(float) * 4);
+	} else {
+		memcpy(&color, colors->child_border, sizeof(float) * 4);
+	}
+	premultiply_alpha(color, con->alpha);
+	box.x = floor(state->x);
+	box.y = floor(state->content_y + state->content_height);
+	box.width = state->width;
+	box.height = state->border_thickness;
+	scale_box(&box, output_scale);
+	render_rect(output, output_damage, &box, color);
+}
+
 struct parent_data {
 	enum sway_container_layout layout;
 	struct wlr_box box;
@@ -757,6 +774,11 @@ static void render_containers_linear(struct sway_output *output,
 				render_top_border(output, damage, child, colors);
 			}
 			render_view(output, damage, child, colors);
+			if (config->titlebar_position != TITLEBAR_BOTTOM) {
+				render_bottom_border(output, damage, child, colors);
+			} else {
+				render_top_border(output, damage, child, colors);
+			}
 		} else {
 			render_container(output, damage, child,
 					parent->focused || child->current.focused);
@@ -823,6 +845,11 @@ static void render_containers_tabbed(struct sway_output *output,
 	// Render surface and left/right/bottom borders
 	if (current->view) {
 		render_view(output, damage, current, current_colors);
+		if (config->titlebar_position != TITLEBAR_BOTTOM) {
+			render_bottom_border(output, damage, current, current_colors);
+		} else {
+			render_top_border(output, damage, current, current_colors);
+		}
 	} else {
 		render_container(output, damage, current,
 				parent->focused || current->current.focused);
@@ -881,6 +908,11 @@ static void render_containers_stacked(struct sway_output *output,
 
 	// Render surface and left/right/bottom borders
 	if (current->view) {
+		if (titlebar_is_on_top) {
+			render_bottom_border(output, damage, current, current_colors);
+		} else {
+			render_top_border(output, damage, current, current_colors);
+		}
 		render_view(output, damage, current, current_colors);
 	} else {
 		render_container(output, damage, current,
@@ -974,6 +1006,11 @@ static void render_floating_container(struct sway_output *soutput,
 					floor(con->current.y), con->current.width, colors,
 					title_texture, marks_texture);
 		} else if (con->current.border == B_PIXEL) {
+			render_top_border(soutput, damage, con, colors);
+		}
+		if (config->titlebar_position != TITLEBAR_BOTTOM) {
+			render_bottom_border(soutput, damage, con, colors);
+		} else {
 			render_top_border(soutput, damage, con, colors);
 		}
 		render_view(soutput, damage, con, colors);
