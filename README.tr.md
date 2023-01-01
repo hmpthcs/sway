@@ -2,7 +2,7 @@
 
 
 Sway, [i3]-uyumlu bir [Wayland] dizgicisidir. [SSS][FAQ]'yi okuyun. 
-[IRC kanalı][IRC channel]na katılın \(irc.freenode.net'te #sway (İngilizce)).
+[IRC kanalı][IRC channel]na katılın \(irc.libera.chat'te #sway (İngilizce)).
 
 ## Sürüm imzaları
 
@@ -26,7 +26,7 @@ Aşağıdaki bağımlılıkları yükleyin:
 * [wlroots]
 * wayland
 * wayland-protocols \*
-* pcre
+* pcre2
 * json-c
 * pango
 * cairo
@@ -60,9 +60,9 @@ TTY'den `sway` çalıştırın. Bazı  görüntü yöneticileriyle(display manag
 [i3]: https://i3wm.org/
 [Wayland]: http://wayland.freedesktop.org/
 [FAQ]: https://github.com/swaywm/sway/wiki
-[IRC channel]: http://webchat.freenode.net/?channels=sway&uio=d4
+[IRC channel]: https://web.libera.chat/gamja/?channels=#sway
 [E88F5E48]: https://keys.openpgp.org/search?q=34FF9526CFEF0E97A340E2E40FDE7BE0E88F5E48
 [GitHub releases]: https://github.com/swaywm/sway/releases
 [Development setup]: https://github.com/swaywm/sway/wiki/Development-Setup
-[wlroots]: https://github.com/swaywm/wlroots
+[wlroots]: https://gitlab.freedesktop.org/wlroots/wlroots
 [scdoc]: https://git.sr.ht/~sircmpwn/scdoc

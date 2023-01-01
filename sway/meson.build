@@ -5,9 +5,12 @@ sway_sources = files(
 	'decoration.c',
 	'ipc-json.c',
 	'ipc-server.c',
+	'lock.c',
 	'main.c',
+	'realtime.c',
 	'server.c',
 	'swaynag.c',
+	'xdg_activation_v1.c',
 	'xdg_decoration.c',
 
 	'desktop/desktop.c',
@@ -18,11 +21,11 @@ sway_sources = files(
 	'desktop/surface.c',
 	'desktop/transaction.c',
 	'desktop/xdg_shell.c',
+	'desktop/launcher.c',
 
 	'input/input-manager.c',
 	'input/cursor.c',
 	'input/keyboard.c',
-	'input/libinput.c',
 	'input/seat.c',
 	'input/seatop_default.c',
 	'input/seatop_down.c',
@@ -64,6 +67,7 @@ sway_sources = files(
 	'commands/force_focus_wrapping.c',
 	'commands/fullscreen.c',
 	'commands/gaps.c',
+	'commands/gesture.c',
 	'commands/hide_edge_borders.c',
 	'commands/inhibit_idle.c',
 	'commands/kill.c',
@@ -82,6 +86,7 @@ sway_sources = files(
 	'commands/nop.c',
 	'commands/output.c',
 	'commands/popup_during_fullscreen.c',
+	'commands/primary_selection.c',
 	'commands/reload.c',
 	'commands/rename.c',
 	'commands/resize.c',
@@ -154,6 +159,7 @@ sway_sources = files(
 	'commands/input/drag.c',
 	'commands/input/drag_lock.c',
 	'commands/input/dwt.c',
+	'commands/input/dwtp.c',
 	'commands/input/events.c',
 	'commands/input/left_handed.c',
 	'commands/input/map_from_region.c',
@@ -162,6 +168,7 @@ sway_sources = files(
 	'commands/input/middle_emulation.c',
 	'commands/input/natural_scroll.c',
 	'commands/input/pointer_accel.c',
+        'commands/input/rotation_angle.c',
 	'commands/input/repeat_delay.c',
 	'commands/input/repeat_rate.c',
 	'commands/input/scroll_button.c',
@@ -188,11 +195,14 @@ sway_sources = files(
 	'commands/output/max_render_time.c',
 	'commands/output/mode.c',
 	'commands/output/position.c',
+	'commands/output/power.c',
+	'commands/output/render_bit_depth.c',
 	'commands/output/scale.c',
 	'commands/output/scale_filter.c',
 	'commands/output/subpixel.c',
 	'commands/output/toggle.c',
 	'commands/output/transform.c',
+	'commands/output/unplug.c',
 
 	'tree/arrange.c',
 	'tree/container.c',
@@ -212,23 +222,28 @@ sway_deps = [
 	libudev,
 	math,
 	pango,
-	pcre,
+	pcre2,
 	glesv2,
 	pixman,
-	server_protos,
+	threads,
 	wayland_server,
 	wlroots,
 	xkbcommon,
+	xcb,
+	xcb_icccm,
 ]
 
 if have_xwayland
 	sway_sources += 'desktop/xwayland.c'
-	sway_deps += xcb
+endif
+
+if wlroots_features['libinput_backend']
+	sway_sources += 'input/libinput.c'
 endif
 
 executable(
 	'sway',
-	sway_sources,
+	sway_sources + wl_protos_src,
 	include_directories: [sway_inc],
 	dependencies: sway_deps,
 	link_with: [lib_sway_common],

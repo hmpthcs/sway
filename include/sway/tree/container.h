@@ -2,8 +2,7 @@
 #define _SWAY_CONTAINER_H
 #include <stdint.h>
 #include <sys/types.h>
-#include <wlr/types/wlr_box.h>
-#include <wlr/types/wlr_surface.h>
+#include <wlr/types/wlr_compositor.h>
 #include "list.h"
 #include "sway/tree/node.h"
 
@@ -118,14 +117,14 @@ struct sway_container {
 
 	struct wlr_texture *title_focused;
 	struct wlr_texture *title_focused_inactive;
+	struct wlr_texture *title_focused_tab_title;
 	struct wlr_texture *title_unfocused;
 	struct wlr_texture *title_urgent;
-	size_t title_height;
-	size_t title_baseline;
 
 	list_t *marks; // char *
 	struct wlr_texture *marks_focused;
 	struct wlr_texture *marks_focused_inactive;
+	struct wlr_texture *marks_focused_tab_title;
 	struct wlr_texture *marks_unfocused;
 	struct wlr_texture *marks_urgent;
 
@@ -183,11 +182,6 @@ void container_reap_empty(struct sway_container *con);
 struct sway_container *container_flatten(struct sway_container *container);
 
 void container_update_title_textures(struct sway_container *container);
-
-/**
- * Calculate the container's title_height property.
- */
-void container_calculate_title_height(struct sway_container *container);
 
 size_t container_build_representation(enum sway_container_layout layout,
 		list_t *children, char *buffer);
@@ -370,7 +364,7 @@ bool container_is_sticky_or_child(struct sway_container *con);
  * This will destroy pairs of redundant H/V splits
  * e.g. H[V[H[app app]] app] -> H[app app app]
  * The middle "V[H[" are eliminated by a call to container_squash
- * on the V[ con. It's grandchildren are added to it's parent.
+ * on the V[ con. It's grandchildren are added to its parent.
  *
  * This function is roughly equivalent to i3's tree_flatten here:
  * https://github.com/i3/i3/blob/1f0c628cde40cf87371481041b7197344e0417c6/src/tree.c#L651

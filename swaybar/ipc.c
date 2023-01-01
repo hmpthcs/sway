@@ -147,8 +147,10 @@ static bool ipc_parse_config(
 
 	json_object *font = json_object_object_get(bar_config, "font");
 	if (font) {
-		free(config->font);
-		config->font = parse_font(json_object_get_string(font));
+		pango_font_description_free(config->font_description);
+		char *font_value = parse_font(json_object_get_string(font));
+		config->font_description = pango_font_description_from_string(font_value);
+		free(font_value);
 	}
 
 	json_object *gaps = json_object_object_get(bar_config, "gaps");
@@ -485,8 +487,7 @@ static bool handle_barconfig_update(struct swaybar *bar, const char *payload,
 			destroy_layer_surface(output);
 			wl_list_remove(&output->link);
 			wl_list_insert(&bar->unused_outputs, &output->link);
-		} else if (!oldcfg->font || !newcfg->font ||
-				strcmp(oldcfg->font, newcfg->font) != 0) {
+		} else if (!pango_font_description_equal(oldcfg->font_description, newcfg->font_description)) {
 			output->height = 0;  // force update height
 		}
 	}
@@ -550,7 +551,7 @@ bool handle_ipc_readable(struct swaybar *bar) {
 	// The default depth of 32 is too small to represent some nested layouts, but
 	// we can't pass INT_MAX here because json-c (as of this writing) prefaults
 	// all the memory for its stack.
-	json_tokener *tok = json_tokener_new_ex(256);
+	json_tokener *tok = json_tokener_new_ex(JSON_MAX_DEPTH);
 	if (!tok) {
 		sway_log_errno(SWAY_ERROR, "failed to create tokener");
 		free_ipc_response(resp);

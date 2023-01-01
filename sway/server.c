@@ -7,24 +7,29 @@
 #include <wlr/backend.h>
 #include <wlr/backend/headless.h>
 #include <wlr/backend/multi.h>
-#include <wlr/backend/noop.h>
-#include <wlr/backend/session.h>
 #include <wlr/config.h>
 #include <wlr/render/wlr_renderer.h>
 #include <wlr/types/wlr_compositor.h>
+#include <wlr/types/wlr_content_type_v1.h>
 #include <wlr/types/wlr_data_control_v1.h>
+#include <wlr/types/wlr_drm.h>
 #include <wlr/types/wlr_export_dmabuf_v1.h>
 #include <wlr/types/wlr_gamma_control_v1.h>
 #include <wlr/types/wlr_idle.h>
+#include <wlr/types/wlr_idle_notify_v1.h>
 #include <wlr/types/wlr_layer_shell_v1.h>
+#include <wlr/types/wlr_linux_dmabuf_v1.h>
 #include <wlr/types/wlr_pointer_constraints_v1.h>
 #include <wlr/types/wlr_primary_selection_v1.h>
 #include <wlr/types/wlr_relative_pointer_v1.h>
 #include <wlr/types/wlr_screencopy_v1.h>
+#include <wlr/types/wlr_single_pixel_buffer_v1.h>
 #include <wlr/types/wlr_server_decoration.h>
+#include <wlr/types/wlr_subcompositor.h>
 #include <wlr/types/wlr_tablet_v2.h>
 #include <wlr/types/wlr_viewporter.h>
 #include <wlr/types/wlr_xcursor_manager.h>
+#include <wlr/types/wlr_xdg_activation_v1.h>
 #include <wlr/types/wlr_xdg_decoration_v1.h>
 #include <wlr/types/wlr_xdg_foreign_registry.h>
 #include <wlr/types/wlr_xdg_foreign_v1.h>
@@ -39,35 +44,71 @@
 #include "sway/output.h"
 #include "sway/server.h"
 #include "sway/tree/root.h"
+
 #if HAVE_XWAYLAND
 #include "sway/xwayland.h"
 #endif
 
-bool server_privileged_prepare(struct sway_server *server) {
-	sway_log(SWAY_DEBUG, "Preparing Wayland server initialization");
+#if WLR_HAS_DRM_BACKEND
+#include <wlr/types/wlr_drm_lease_v1.h>
+#endif
+
+#define SWAY_XDG_SHELL_VERSION 2
+#define SWAY_LAYER_SHELL_VERSION 3
+
+#if WLR_HAS_DRM_BACKEND
+static void handle_drm_lease_request(struct wl_listener *listener, void *data) {
+	/* We only offer non-desktop outputs, but in the future we might want to do
+	 * more logic here. */
+
+	struct wlr_drm_lease_request_v1 *req = data;
+	struct wlr_drm_lease_v1 *lease = wlr_drm_lease_request_v1_grant(req);
+	if (!lease) {
+		sway_log(SWAY_ERROR, "Failed to grant lease request");
+		wlr_drm_lease_request_v1_reject(req);
+	}
+}
+#endif
+
+bool server_init(struct sway_server *server) {
+	sway_log(SWAY_DEBUG, "Initializing Wayland server");
 	server->wl_display = wl_display_create();
 	server->wl_event_loop = wl_display_get_event_loop(server->wl_display);
-	server->backend = wlr_backend_autocreate(server->wl_display);
 
+	server->backend = wlr_backend_autocreate(server->wl_display, &server->session);
 	if (!server->backend) {
 		sway_log(SWAY_ERROR, "Unable to create backend");
 		return false;
 	}
-	return true;
-}
 
-bool server_init(struct sway_server *server) {
-	sway_log(SWAY_DEBUG, "Initializing Wayland server");
+	server->renderer = wlr_renderer_autocreate(server->backend);
+	if (!server->renderer) {
+		sway_log(SWAY_ERROR, "Failed to create renderer");
+		return false;
+	}
 
-	struct wlr_renderer *renderer = wlr_backend_get_renderer(server->backend);
-	assert(renderer);
+	wlr_renderer_init_wl_shm(server->renderer, server->wl_display);
 
-	wlr_renderer_init_wl_display(renderer, server->wl_display);
+	if (wlr_renderer_get_dmabuf_texture_formats(server->renderer) != NULL) {
+		wlr_drm_create(server->wl_display, server->renderer);
+		server->linux_dmabuf_v1 = wlr_linux_dmabuf_v1_create_with_renderer(
+			server->wl_display, 4, server->renderer);
+	}
 
-	server->compositor = wlr_compositor_create(server->wl_display, renderer);
+	server->allocator = wlr_allocator_autocreate(server->backend,
+		server->renderer);
+	if (!server->allocator) {
+		sway_log(SWAY_ERROR, "Failed to create allocator");
+		return false;
+	}
+
+	server->compositor = wlr_compositor_create(server->wl_display,
+		server->renderer);
 	server->compositor_new_surface.notify = handle_compositor_new_surface;
 	wl_signal_add(&server->compositor->events.new_surface,
 		&server->compositor_new_surface);
+
+	wlr_subcompositor_create(server->wl_display);
 
 	server->data_device_manager =
 		wlr_data_device_manager_create(server->wl_display);
@@ -83,15 +124,18 @@ bool server_init(struct sway_server *server) {
 	wlr_xdg_output_manager_v1_create(server->wl_display, root->output_layout);
 
 	server->idle = wlr_idle_create(server->wl_display);
+	server->idle_notifier_v1 = wlr_idle_notifier_v1_create(server->wl_display);
 	server->idle_inhibit_manager_v1 =
 		sway_idle_inhibit_manager_v1_create(server->wl_display, server->idle);
 
-	server->layer_shell = wlr_layer_shell_v1_create(server->wl_display);
+	server->layer_shell = wlr_layer_shell_v1_create(server->wl_display,
+		SWAY_LAYER_SHELL_VERSION);
 	wl_signal_add(&server->layer_shell->events.new_surface,
 		&server->layer_shell_surface);
 	server->layer_shell_surface.notify = handle_layer_shell_surface;
 
-	server->xdg_shell = wlr_xdg_shell_create(server->wl_display);
+	server->xdg_shell = wlr_xdg_shell_create(server->wl_display,
+		SWAY_XDG_SHELL_VERSION);
 	wl_signal_add(&server->xdg_shell->events.new_surface,
 		&server->xdg_shell_surface);
 	server->xdg_shell_surface.notify = handle_xdg_shell_surface;
@@ -148,21 +192,46 @@ bool server_init(struct sway_server *server) {
 	server->foreign_toplevel_manager =
 		wlr_foreign_toplevel_manager_v1_create(server->wl_display);
 
+	sway_session_lock_init();
+
+#if WLR_HAS_DRM_BACKEND
+	server->drm_lease_manager=
+		wlr_drm_lease_v1_manager_create(server->wl_display, server->backend);
+	if (server->drm_lease_manager) {
+		server->drm_lease_request.notify = handle_drm_lease_request;
+		wl_signal_add(&server->drm_lease_manager->events.request,
+				&server->drm_lease_request);
+	} else {
+		sway_log(SWAY_DEBUG, "Failed to create wlr_drm_lease_device_v1");
+		sway_log(SWAY_INFO, "VR will not be available");
+	}
+#endif
+
 	wlr_export_dmabuf_manager_v1_create(server->wl_display);
 	wlr_screencopy_manager_v1_create(server->wl_display);
 	wlr_data_control_manager_v1_create(server->wl_display);
-	wlr_primary_selection_v1_device_manager_create(server->wl_display);
 	wlr_viewporter_create(server->wl_display);
+	wlr_single_pixel_buffer_manager_v1_create(server->wl_display);
+	server->content_type_manager_v1 =
+		wlr_content_type_manager_v1_create(server->wl_display, 1);
 
 	struct wlr_xdg_foreign_registry *foreign_registry =
 		wlr_xdg_foreign_registry_create(server->wl_display);
 	wlr_xdg_foreign_v1_create(server->wl_display, foreign_registry);
 	wlr_xdg_foreign_v2_create(server->wl_display, foreign_registry);
 
+	server->xdg_activation_v1 = wlr_xdg_activation_v1_create(server->wl_display);
+	server->xdg_activation_v1_request_activate.notify =
+		xdg_activation_v1_handle_request_activate;
+	wl_signal_add(&server->xdg_activation_v1->events.request_activate,
+		&server->xdg_activation_v1_request_activate);
+
+	wl_list_init(&server->pending_launcher_ctxs);
+
 	// Avoid using "wayland-0" as display socket
 	char name_candidate[16];
-	for (int i = 1; i <= 32; ++i) {
-		sprintf(name_candidate, "wayland-%d", i);
+	for (unsigned int i = 1; i <= 32; ++i) {
+		snprintf(name_candidate, sizeof(name_candidate), "wayland-%u", i);
 		if (wl_display_add_socket(server->wl_display, name_candidate) >= 0) {
 			server->socket = strdup(name_candidate);
 			break;
@@ -175,19 +244,19 @@ bool server_init(struct sway_server *server) {
 		return false;
 	}
 
-	server->noop_backend = wlr_noop_backend_create(server->wl_display);
-
-	struct wlr_output *wlr_output = wlr_noop_add_output(server->noop_backend);
-	root->noop_output = output_create(wlr_output);
-
-	server->headless_backend =
-		wlr_headless_backend_create_with_renderer(server->wl_display, renderer);
+	server->headless_backend = wlr_headless_backend_create(server->wl_display);
 	if (!server->headless_backend) {
-		sway_log(SWAY_INFO, "Failed to create secondary headless backend, "
-			"starting without it");
+		sway_log(SWAY_ERROR, "Failed to create secondary headless backend");
+		wlr_backend_destroy(server->backend);
+		return false;
 	} else {
 		wlr_multi_backend_add(server->backend, server->headless_backend);
 	}
+
+	struct wlr_output *wlr_output =
+			wlr_headless_add_output(server->headless_backend, 800, 600);
+	wlr_output_set_name(wlr_output, "FALLBACK");
+	root->fallback_output = output_create(wlr_output);
 
 	// This may have been set already via -Dtxn-timeout
 	if (!server->txn_timeout_ms) {
@@ -238,6 +307,10 @@ bool server_start(struct sway_server *server) {
 	}
 #endif
 
+	if (config->primary_selection) {
+		wlr_primary_selection_v1_device_manager_create(server->wl_display);
+	}
+
 	sway_log(SWAY_INFO, "Starting backend on wayland display '%s'",
 			server->socket);
 	if (!wlr_backend_start(server->backend)) {
@@ -245,6 +318,7 @@ bool server_start(struct sway_server *server) {
 		wlr_backend_destroy(server->backend);
 		return false;
 	}
+
 	return true;
 }
 

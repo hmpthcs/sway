@@ -1,8 +1,8 @@
 # Sway
-Sway ist ein [i3](https://i3wm.org/)-kompatibler [Wayland](http://wayland.freedesktop.org/)-Compositor. Lies die [FAQ](https://github.com/swaywm/sway/wiki). Tritt dem [IRC Channel](http://webchat.freenode.net/?channels=sway&uio=d4) bei (#sway on irc.freenode.net; Englisch).
+Sway ist ein [i3](https://i3wm.org/)-kompatibler [Wayland](http://wayland.freedesktop.org/)-Compositor. Lies die [FAQ](https://github.com/swaywm/sway/wiki). Tritt dem [IRC Channel](https://web.libera.chat/gamja/?channels=#sway) bei (#sway on irc.libera.chat; Englisch).
 
 ## Signaturen
-Jedes Release wird mit dem PGP-Schlüssel [B22DA89A](http://pgp.mit.edu/pks/lookup?op=vindex&search=0x52CB6609B22DA89A) signiert und auf GitHub veröffentlicht.
+Jedes Release wird mit dem PGP-Schlüssel [E88F5E48](https://keys.openpgp.org/search?q=34FF9526CFEF0E97A340E2E40FDE7BE0E88F5E48) signiert und auf GitHub veröffentlicht.
 
 ## Installation
 ### Mit der Paketverwaltung
@@ -15,10 +15,10 @@ Falls du sway für deine eigene Distribution als Paket bereitstellen möchtest, 
 sway benötigt die folgenden Pakete:
 
 * meson\*
-* [wlroots](https://github.com/swaywm/wlroots)
+* [wlroots](https://gitlab.freedesktop.org/wlroots/wlroots)
 * wayland
 * wayland-protocols\*
-* pcre
+* pcre2
 * json-c
 * pango
 * cairo

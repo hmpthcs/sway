@@ -5,16 +5,19 @@
 #include <string.h>
 #include <time.h>
 #include <wlr/interfaces/wlr_switch.h>
-#include <wlr/types/wlr_box.h>
 #include <wlr/types/wlr_tablet_tool.h>
+#include <wlr/util/box.h>
 #include <xkbcommon/xkbcommon.h>
+#include <xf86drmMode.h>
 #include "../include/config.h"
+#include "gesture.h"
 #include "list.h"
 #include "swaynag.h"
 #include "tree/container.h"
 #include "sway/input/tablet.h"
 #include "sway/tree/root.h"
 #include "wlr-layer-shell-unstable-v1-protocol.h"
+#include <pango/pangocairo.h>
 
 // TODO: Refactor this shit
 
@@ -31,7 +34,8 @@ enum binding_input_type {
 	BINDING_KEYSYM,
 	BINDING_MOUSECODE,
 	BINDING_MOUSESYM,
-	BINDING_SWITCH
+	BINDING_SWITCH, // dummy, only used to call seat_execute_command
+	BINDING_GESTURE // dummy, only used to call seat_execute_command
 };
 
 enum binding_flags {
@@ -44,10 +48,11 @@ enum binding_flags {
 	BINDING_RELOAD = 1 << 6, // switch only; (re)trigger binding on reload
 	BINDING_INHIBITED = 1 << 7, // keyboard only: ignore shortcut inhibitor
 	BINDING_NOREPEAT = 1 << 8, // keyboard only; do not trigger when repeating a held key
+	BINDING_EXACT = 1 << 9, // gesture only; only trigger on exact match
 };
 
 /**
- * A key binding and an associated command.
+ * A key (or mouse) binding and an associated command.
  */
 struct sway_binding {
 	enum binding_input_type type;
@@ -61,12 +66,10 @@ struct sway_binding {
 	char *command;
 };
 
-/**
- * A mouse binding and an associated command.
- */
-struct sway_mouse_binding {
-	uint32_t button;
-	char *command;
+enum sway_switch_trigger {
+	SWAY_SWITCH_TRIGGER_OFF,
+	SWAY_SWITCH_TRIGGER_ON,
+	SWAY_SWITCH_TRIGGER_TOGGLE,
 };
 
 /**
@@ -74,8 +77,18 @@ struct sway_mouse_binding {
  */
 struct sway_switch_binding {
 	enum wlr_switch_type type;
-	enum wlr_switch_state state;
+	enum sway_switch_trigger trigger;
 	uint32_t flags;
+	char *command;
+};
+
+/**
+ * A gesture binding and an associated command.
+ */
+struct sway_gesture_binding {
+	char *input;
+	uint32_t flags;
+	struct gesture gesture;
 	char *command;
 };
 
@@ -98,6 +111,7 @@ struct sway_mode {
 	list_t *keycode_bindings;
 	list_t *mouse_bindings;
 	list_t *switch_bindings;
+	list_t *gesture_bindings;
 	bool pango;
 };
 
@@ -136,10 +150,12 @@ struct input_config {
 	int drag;
 	int drag_lock;
 	int dwt;
+	int dwtp;
 	int left_handed;
 	int middle_emulation;
 	int natural_scroll;
 	float pointer_accel;
+	float rotation_angle;
 	float scroll_factor;
 	int repeat_delay;
 	int repeat_rate;
@@ -233,17 +249,17 @@ struct seat_config {
 	} xcursor_theme;
 };
 
-enum config_dpms {
-	DPMS_IGNORE,
-	DPMS_ON,
-	DPMS_OFF,
-};
-
 enum scale_filter_mode {
 	SCALE_FILTER_DEFAULT, // the default is currently smart
 	SCALE_FILTER_LINEAR,
 	SCALE_FILTER_NEAREST,
 	SCALE_FILTER_SMART,
+};
+
+enum render_bit_depth {
+	RENDER_BIT_DEPTH_DEFAULT, // the default is currently 8
+	RENDER_BIT_DEPTH_8,
+	RENDER_BIT_DEPTH_10,
 };
 
 /**
@@ -254,9 +270,11 @@ enum scale_filter_mode {
 struct output_config {
 	char *name;
 	int enabled;
+	int power;
 	int width, height;
 	float refresh_rate;
 	int custom_mode;
+	drmModeModeInfo drm_mode;
 	int x, y;
 	float scale;
 	enum scale_filter_mode scale_filter;
@@ -264,11 +282,11 @@ struct output_config {
 	enum wl_output_subpixel subpixel;
 	int max_render_time; // In milliseconds
 	int adaptive_sync;
+	enum render_bit_depth render_bit_depth;
 
 	char *background;
 	char *background_option;
 	char *background_fallback;
-	enum config_dpms dpms_state;
 };
 
 /**
@@ -281,6 +299,12 @@ struct side_gaps {
 	int left;
 };
 
+enum smart_gaps_mode {
+	SMART_GAPS_OFF,
+	SMART_GAPS_ON,
+	SMART_GAPS_INVERSE_OUTER,
+};
+
 /**
  * Stores configuration for a workspace, regardless of whether the workspace
  * exists.
@@ -290,6 +314,12 @@ struct workspace_config {
 	list_t *outputs;
 	int gaps_inner;
 	struct side_gaps gaps_outer;
+};
+
+enum pango_markup_config {
+	PANGO_MARKUP_DISABLED = false,
+	PANGO_MARKUP_ENABLED = true,
+	PANGO_MARKUP_DEFAULT // The default is font dependent ("pango:" prefix)
 };
 
 struct bar_config {
@@ -323,7 +353,7 @@ struct bar_config {
 	char *position;
 	list_t *bindings;
 	char *status_command;
-	bool pango_markup;
+	enum pango_markup_config pango_markup;
 	char *font;
 	int height; // -1 not defined
 	bool workspace_buttons;
@@ -410,14 +440,6 @@ enum sway_popup_during_fullscreen {
 	POPUP_LEAVE,
 };
 
-enum command_context {
-	CONTEXT_CONFIG = 1 << 0,
-	CONTEXT_BINDING = 1 << 1,
-	CONTEXT_IPC = 1 << 2,
-	CONTEXT_CRITERIA = 1 << 3,
-	CONTEXT_ALL = 0xFFFFFFFF,
-};
-
 enum focus_follows_mouse_mode {
 	FOLLOWS_NO,
 	FOLLOWS_YES,
@@ -484,9 +506,10 @@ struct sway_config {
 	char *floating_scroll_right_cmd;
 	enum sway_container_layout default_orientation;
 	enum sway_container_layout default_layout;
-	char *font;
-	size_t font_height;
-	size_t font_baseline;
+	char *font; // Used for IPC.
+	PangoFontDescription *font_description; // Used internally for rendering and validating.
+	int font_height;
+	int font_baseline;
 	bool pango_markup;
 	int titlebar_border_thickness;
 	int titlebar_h_padding;
@@ -514,11 +537,12 @@ struct sway_config {
 	bool show_marks;
 	enum alignment title_align;
 	enum titlebar_position titlebar_position;
+	bool primary_selection;
 
 	bool tiling_drag;
 	int tiling_drag_threshold;
 
-	bool smart_gaps;
+	enum smart_gaps_mode smart_gaps;
 	int gaps_inner;
 	struct side_gaps gaps_outer;
 
@@ -541,11 +565,14 @@ struct sway_config {
 	struct {
 		struct border_colors focused;
 		struct border_colors focused_inactive;
+		struct border_colors focused_tab_title;
 		struct border_colors unfocused;
 		struct border_colors urgent;
 		struct border_colors placeholder;
 		float background[4];
 	} border_colors;
+
+	bool has_focused_tab_title;
 
 	// floating view
 	int32_t floating_maximum_width;
@@ -681,6 +708,8 @@ void free_sway_binding(struct sway_binding *sb);
 
 void free_switch_binding(struct sway_switch_binding *binding);
 
+void free_gesture_binding(struct sway_gesture_binding *binding);
+
 void seat_execute_command(struct sway_seat *seat, struct sway_binding *binding);
 
 void load_swaybar(struct bar_config *bar);
@@ -696,14 +725,13 @@ void free_bar_binding(struct bar_binding *binding);
 void free_workspace_config(struct workspace_config *wsc);
 
 /**
- * Updates the value of config->font_height based on the max title height
- * reported by each container. If recalculate is true, the containers will
- * recalculate their heights before reporting.
+ * Updates the value of config->font_height based on the metrics for title's
+ * font as reported by pango.
  *
  * If the height has changed, all containers will be rearranged to take on the
  * new size.
  */
-void config_update_font_height(bool recalculate);
+void config_update_font_height(void);
 
 /**
  * Convert bindsym into bindcode using the first configured layout.

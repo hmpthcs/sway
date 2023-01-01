@@ -24,7 +24,7 @@ must be separated by one space. For example:
 
 # COMMANDS
 
-*output* <name> mode|resolution|res [--custom] <WIDTHxHEIGHT>[@<RATE>Hz]
+*output* <name> mode|resolution|res [--custom] <width>x<height>[@<rate>Hz]
 	Configures the specified output to use the given mode. Modes are a
 	combination of width and height (in pixels) and a refresh rate that your
 	display can be configured to use. For a list of available modes for each
@@ -39,6 +39,16 @@ must be separated by one space. For example:
 		output HDMI-A-1 mode 1920x1080
 
 		output HDMI-A-1 mode 1920x1080@60Hz
+
+*output* <name> modeline <clock> <hdisplay> <hsync_start> <hsync_end> <htotal> <vdisplay> <vsync_start> <vsync_end> <vtotal> <hsync> <vsync>
+	Configures the specified output to use the given modeline. It can be
+	generated using *cvt*(1) and *gtf*(1) commands. See *xorg.conf*(5).
+	Only supported on DRM backend.
+
+	Example:
+
+		output HDMI-A-1 modeline 173.00 1920 2048 2248 2576 1080 1083 1088 1120 -hsync +vsync
+
 
 *output* <name> position|pos <X> <Y>
 	Places the specified output at the specific position in the global
@@ -109,12 +119,20 @@ must be separated by one space. For example:
 	Enables or disables the specified output (all outputs are enabled by
 	default).
 
+	As opposed to the _power_ command, the output will loose its current
+	workspace and windows.
+
 *output* <name> toggle
 	Toggle the specified output.
 
+*output* <name> power on|off|toggle
+	Turns on or off the specified output.
+
+	As opposed to the _enable_ and _disable_ commands, the output keeps its
+	current workspaces and windows.
+
 *output* <name> dpms on|off|toggle
-	Enables or disables the specified output via DPMS. To turn an output off
-	(ie. blank the screen but keep workspaces as-is), one can set DPMS to off.
+	Deprecated. Alias for _power_.
 
 *output* <name> max_render_time off|<msec>
 	Controls when sway composites the output, as a positive number of
@@ -142,10 +160,25 @@ must be separated by one space. For example:
 	Enables or disables adaptive synchronization (often referred to as Variable
 	Refresh Rate, or by the vendor-specific names FreeSync/G-Sync).
 
-	Adaptive sync allows clients to submit frames a little to late without
+	Adaptive sync allows clients to submit frames a little too late without
 	having to wait a whole refresh period to display it on screen. Enabling
 	adaptive sync can improve latency, but can cause flickering on some
 	hardware.
+
+*output* <name> render_bit_depth 8|10
+	Controls the color channel bit depth at which frames are rendered; the
+	default is currently 8 bits per channel.
+
+	Setting higher values will not have an effect if hardware and software lack
+	support for such bit depths. Successfully increasing the render bit depth
+	will not necessarily increase the bit depth of the frames sent to a display.
+	An increased render bit depth may provide smoother rendering of gradients,
+	and screenshots which can more precisely store the colors of programs
+	which display high bit depth colors.
+
+	Warnings: this can break screenshot/screencast programs which have not been
+	updated to work with different bit depths. This command is experimental,
+	and may be removed or changed in the future.
 
 # SEE ALSO
 

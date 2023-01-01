@@ -2,7 +2,7 @@
 
 Swayは[i3](https://i3wm.org/)互換な[Wayland](http://wayland.freedesktop.org/)コンポジタです。
 [FAQ](https://github.com/swaywm/sway/wiki)も合わせてご覧ください。
-[IRC チャンネル](http://webchat.freenode.net/?channels=sway&uio=d4) (irc.freenode.netの#sway)もあります。
+[IRC チャンネル](https://web.libera.chat/gamja/?channels=#sway) (irc.libera.chatの#sway)もあります。
 
 [![](https://sr.ht/ICd5.png)](https://sr.ht/ICd5.png)
 
@@ -12,7 +12,7 @@ SirCmpwnは、日本語でのサポートをIRCとGitHubで行います。タイ
 
 ## リリースの署名
 
-Swayのリリースは[B22DA89A](http://pgp.mit.edu/pks/lookup?op=vindex&search=0x52CB6609B22DA89A)で署名され、[GitHub](https://github.com/swaywm/sway/releases)で公開されています。
+Swayのリリースは[E88F5E48](https://keys.openpgp.org/search?q=34FF9526CFEF0E97A340E2E40FDE7BE0E88F5E48)で署名され、[GitHub](https://github.com/swaywm/sway/releases)で公開されています。
 
 ## インストール
 
@@ -27,30 +27,24 @@ Swayは沢山のディストリビューションで提供されています。"
 次の依存パッケージをインストールしてください:
 
 * meson \*
-* [wlroots](https://github.com/swaywm/wlroots)
+* [wlroots](https://gitlab.freedesktop.org/wlroots/wlroots)
 * wayland
 * wayland-protocols \*
-* pcre
+* pcre2
 * json-c
 * pango
 * cairo
-* gdk-pixbuf2 (システムイコンで必要です)
-* [scdoc](https://git.sr.ht/~sircmpwn/scdoc) (manで必要です) \*
-* git \*
+* gdk-pixbuf2 (任意: システムイコンで必要です)
+* [scdoc](https://git.sr.ht/~sircmpwn/scdoc) (任意: manで必要です) \*
+* git (任意: バージョン情報で必要です) \*
 
-_\*コンパイルの時_
+_\*コンパイル時の依存_
 
 次のコマンドを実行してください:
 
     meson build
     ninja -C build
     sudo ninja -C build install
-
-logindを使用していないシステムでは、バイナリにsuidを設定する必要があります:
-
-    sudo chmod a+s /usr/local/bin/sway
-
-swayは起動後、すぐにroot許可を落とします。
 
 ## 設定
 

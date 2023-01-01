@@ -6,6 +6,7 @@
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
+#include <sys/resource.h>
 #include <sys/stat.h>
 #include <sys/types.h>
 #include <sys/wait.h>
@@ -27,6 +28,7 @@
 
 static bool terminate_request = false;
 static int exit_value = 0;
+static struct rlimit original_nofile_rlimit = {0};
 struct sway_server server = {0};
 struct sway_debug debug = {0};
 
@@ -63,7 +65,7 @@ void detect_proprietary(int allow_unsupported_gpu) {
 				sway_log(SWAY_ERROR,
 					"Proprietary Nvidia drivers are NOT supported. "
 					"Use Nouveau. To launch sway anyway, launch with "
-					"--my-next-gpu-wont-be-nvidia and DO NOT report issues.");
+					"--unsupported-gpu and DO NOT report issues.");
 				exit(EXIT_FAILURE);
 			}
 			break;
@@ -148,25 +150,45 @@ static void log_kernel(void) {
 	pclose(f);
 }
 
-
-static bool drop_permissions(void) {
-	if (getuid() != geteuid() || getgid() != getegid()) {
-		// Set the gid and uid in the correct order.
-		if (setgid(getgid()) != 0) {
-			sway_log(SWAY_ERROR, "Unable to drop root group, refusing to start");
-			return false;
-		}
-		if (setuid(getuid()) != 0) {
-			sway_log(SWAY_ERROR, "Unable to drop root user, refusing to start");
-			return false;
-		}
-	}
-	if (setgid(0) != -1 || setuid(0) != -1) {
-		sway_log(SWAY_ERROR, "Unable to drop root (we shouldn't be able to "
-			"restore it after setuid), refusing to start");
+static bool detect_suid(void) {
+	if (geteuid() != 0 && getegid() != 0) {
 		return false;
 	}
+
+	if (getuid() == geteuid() && getgid() == getegid()) {
+		return false;
+	}
+
+	sway_log(SWAY_ERROR, "SUID operation is no longer supported, refusing to start. "
+			"This check will be removed in a future release.");
 	return true;
+}
+
+static void increase_nofile_limit(void) {
+	if (getrlimit(RLIMIT_NOFILE, &original_nofile_rlimit) != 0) {
+		sway_log_errno(SWAY_ERROR, "Failed to bump max open files limit: "
+			"getrlimit(NOFILE) failed");
+		return;
+	}
+
+	struct rlimit new_rlimit = original_nofile_rlimit;
+	new_rlimit.rlim_cur = new_rlimit.rlim_max;
+	if (setrlimit(RLIMIT_NOFILE, &new_rlimit) != 0) {
+		sway_log_errno(SWAY_ERROR, "Failed to bump max open files limit: "
+			"setrlimit(NOFILE) failed");
+		sway_log(SWAY_INFO, "Running with %d max open files",
+			(int)original_nofile_rlimit.rlim_cur);
+	}
+}
+
+void restore_nofile_limit(void) {
+	if (original_nofile_rlimit.rlim_cur == 0) {
+		return;
+	}
+	if (setrlimit(RLIMIT_NOFILE, &original_nofile_rlimit) != 0) {
+		sway_log_errno(SWAY_ERROR, "Failed to restore max open files limit: "
+			"setrlimit(NOFILE) failed");
+	}
 }
 
 void enable_debug_flag(const char *flag) {
@@ -182,6 +204,8 @@ void enable_debug_flag(const char *flag) {
 		debug.txn_timings = true;
 	} else if (strncmp(flag, "txn-timeout=", 12) == 0) {
 		server.txn_timeout_ms = atoi(&flag[12]);
+	} else if (strcmp(flag, "noscanout") == 0) {
+		debug.noscanout = true;
 	} else {
 		sway_log(SWAY_ERROR, "Unknown debug flag: %s", flag);
 	}
@@ -206,35 +230,34 @@ static void handle_wlr_log(enum wlr_log_importance importance,
 	_sway_vlog(convert_wlr_log_importance(importance), sway_fmt, args);
 }
 
-int main(int argc, char **argv) {
-	static int verbose = 0, debug = 0, validate = 0, allow_unsupported_gpu = 0;
+static const struct option long_options[] = {
+	{"help", no_argument, NULL, 'h'},
+	{"config", required_argument, NULL, 'c'},
+	{"validate", no_argument, NULL, 'C'},
+	{"debug", no_argument, NULL, 'd'},
+	{"version", no_argument, NULL, 'v'},
+	{"verbose", no_argument, NULL, 'V'},
+	{"get-socketpath", no_argument, NULL, 'p'},
+	{"unsupported-gpu", no_argument, NULL, 'u'},
+	{0, 0, 0, 0}
+};
 
-	static const struct option long_options[] = {
-		{"help", no_argument, NULL, 'h'},
-		{"config", required_argument, NULL, 'c'},
-		{"validate", no_argument, NULL, 'C'},
-		{"debug", no_argument, NULL, 'd'},
-		{"version", no_argument, NULL, 'v'},
-		{"verbose", no_argument, NULL, 'V'},
-		{"get-socketpath", no_argument, NULL, 'p'},
-		{"unsupported-gpu", no_argument, NULL, 'u'},
-		{"my-next-gpu-wont-be-nvidia", no_argument, NULL, 'u'},
-		{0, 0, 0, 0}
-	};
+static const char usage[] =
+	"Usage: sway [options] [command]\n"
+	"\n"
+	"  -h, --help             Show help message and quit.\n"
+	"  -c, --config <config>  Specify a config file.\n"
+	"  -C, --validate         Check the validity of the config file, then exit.\n"
+	"  -d, --debug            Enables full logging, including debug information.\n"
+	"  -v, --version          Show the version number and quit.\n"
+	"  -V, --verbose          Enables more verbose logging.\n"
+	"      --get-socketpath   Gets the IPC socket path and prints it, then exits.\n"
+	"\n";
+
+int main(int argc, char **argv) {
+	static bool verbose = false, debug = false, validate = false, allow_unsupported_gpu = false;
 
 	char *config_path = NULL;
-
-	const char* usage =
-		"Usage: sway [options] [command]\n"
-		"\n"
-		"  -h, --help             Show help message and quit.\n"
-		"  -c, --config <config>  Specify a config file.\n"
-		"  -C, --validate         Check the validity of the config file, then exit.\n"
-		"  -d, --debug            Enables full logging, including debug information.\n"
-		"  -v, --version          Show the version number and quit.\n"
-		"  -V, --verbose          Enables more verbose logging.\n"
-		"      --get-socketpath   Gets the IPC socket path and prints it, then exits.\n"
-		"\n";
 
 	int c;
 	while (1) {
@@ -253,25 +276,25 @@ int main(int argc, char **argv) {
 			config_path = strdup(optarg);
 			break;
 		case 'C': // validate
-			validate = 1;
+			validate = true;
 			break;
 		case 'd': // debug
-			debug = 1;
+			debug = true;
 			break;
 		case 'D': // extended debug options
 			enable_debug_flag(optarg);
 			break;
 		case 'u':
-			allow_unsupported_gpu = 1;
+			allow_unsupported_gpu = true;
 			break;
 		case 'v': // version
 			printf("sway version " SWAY_VERSION "\n");
 			exit(EXIT_SUCCESS);
 			break;
 		case 'V': // verbose
-			verbose = 1;
+			verbose = true;
 			break;
-		case 'p': ; // --get-socketpath
+		case 'p': // --get-socketpath
 			if (getenv("SWAYSOCK")) {
 				printf("%s\n", getenv("SWAYSOCK"));
 				exit(EXIT_SUCCESS);
@@ -284,6 +307,11 @@ int main(int argc, char **argv) {
 			fprintf(stderr, "%s", usage);
 			exit(EXIT_FAILURE);
 		}
+	}
+
+	// SUID operation is deprecated, so block it for now.
+	if (detect_suid()) {
+		exit(EXIT_FAILURE);
 	}
 
 	// Since wayland requires XDG_RUNTIME_DIR to be set, abort with just the
@@ -312,7 +340,6 @@ int main(int argc, char **argv) {
 	log_kernel();
 	log_distro();
 	log_env();
-	detect_proprietary(allow_unsupported_gpu);
 
 	if (optind < argc) { // Behave as IPC client
 		if (optind != 1) {
@@ -323,9 +350,6 @@ int main(int argc, char **argv) {
 					"issues. See `man 1 sway` or `sway -h` for usage. If you "
 					"are trying to generate a debug log, use "
 					"`sway -d 2>sway.log`.");
-			exit(EXIT_FAILURE);
-		}
-		if (!drop_permissions()) {
 			exit(EXIT_FAILURE);
 		}
 		char *socket_path = getenv("SWAYSOCK");
@@ -339,14 +363,8 @@ int main(int argc, char **argv) {
 		return 0;
 	}
 
-	if (!server_privileged_prepare(&server)) {
-		return 1;
-	}
-
-	if (!drop_permissions()) {
-		server_fini(&server);
-		exit(EXIT_FAILURE);
-	}
+	detect_proprietary(allow_unsupported_gpu);
+	increase_nofile_limit();
 
 	// handle SIGTERM signals
 	signal(SIGTERM, sig_handler);
@@ -376,6 +394,8 @@ int main(int argc, char **argv) {
 		sway_terminate(EXIT_FAILURE);
 		goto shutdown;
 	}
+
+	set_rr_scheduling();
 
 	if (!server_start(&server)) {
 		sway_terminate(EXIT_FAILURE);

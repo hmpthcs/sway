@@ -1,7 +1,7 @@
 #ifndef _SWAY_VIEW_H
 #define _SWAY_VIEW_H
 #include <wayland-server-core.h>
-#include <wlr/types/wlr_surface.h>
+#include <wlr/types/wlr_compositor.h>
 #include "config.h"
 #if HAVE_XWAYLAND
 #include <wlr/xwayland.h>
@@ -74,6 +74,7 @@ struct sway_view {
 	struct sway_xdg_decoration *xdg_decoration;
 
 	pid_t pid;
+	struct launcher_ctx *ctx;
 
 	// The size the view would want to be if it weren't tiled.
 	// Used when changing a view from tiled to floating.
@@ -108,11 +109,10 @@ struct sway_view {
 	list_t *executed_criteria; // struct criteria *
 
 	union {
-		struct wlr_xdg_surface *wlr_xdg_surface;
+		struct wlr_xdg_toplevel *wlr_xdg_toplevel;
 #if HAVE_XWAYLAND
 		struct wlr_xwayland_surface *wlr_xwayland_surface;
 #endif
-		struct wlr_wl_shell_surface *wlr_wl_shell_surface;
 	};
 
 	struct {
@@ -156,6 +156,7 @@ struct sway_xwayland_view {
 	struct wl_listener set_title;
 	struct wl_listener set_class;
 	struct wl_listener set_role;
+	struct wl_listener set_startup_id;
 	struct wl_listener set_window_type;
 	struct wl_listener set_hints;
 	struct wl_listener set_decorations;
@@ -171,6 +172,7 @@ struct sway_xwayland_unmanaged {
 
 	int lx, ly;
 
+	struct wl_listener request_activate;
 	struct wl_listener request_configure;
 	struct wl_listener request_fullscreen;
 	struct wl_listener commit;
@@ -184,7 +186,7 @@ struct sway_xwayland_unmanaged {
 struct sway_view_child;
 
 struct sway_view_child_impl {
-	void (*get_root_coords)(struct sway_view_child *child, int *sx, int *sy);
+	void (*get_view_coords)(struct sway_view_child *child, int *sx, int *sy);
 	void (*destroy)(struct sway_view_child *child);
 };
 
@@ -218,7 +220,7 @@ struct sway_subsurface {
 struct sway_xdg_popup {
 	struct sway_view_child child;
 
-	struct wlr_xdg_surface *wlr_xdg_surface;
+	struct wlr_xdg_popup *wlr_xdg_popup;
 
 	struct wl_listener new_popup;
 	struct wl_listener destroy;
@@ -311,6 +313,15 @@ void view_destroy(struct sway_view *view);
 
 void view_begin_destroy(struct sway_view *view);
 
+/**
+ * Map a view, ie. make it visible in the tree.
+ *
+ * `fullscreen` should be set to true (and optionally `fullscreen_output`
+ * should be populated) if the view should be made fullscreen immediately.
+ *
+ * `decoration` should be set to true if the client prefers CSD. The client's
+ * preference may be ignored.
+ */
 void view_map(struct sway_view *view, struct wlr_surface *wlr_surface,
 	bool fullscreen, struct wlr_output *fullscreen_output, bool decoration);
 
@@ -362,5 +373,7 @@ void view_remove_saved_buffer(struct sway_view *view);
 void view_save_buffer(struct sway_view *view);
 
 bool view_is_transient_for(struct sway_view *child, struct sway_view *ancestor);
+
+void view_assign_ctx(struct sway_view *view, struct launcher_ctx *ctx);
 
 #endif

@@ -2,8 +2,8 @@
 
 Sway це сумісний з [i3](https://i3wm.org/) композитор [Wayland](http://wayland.freedesktop.org/).
 Ознайомтесь з [ЧаПами](https://github.com/swaywm/sway/wiki). Приєднуйтесь до [спільноти в
-IRC](http://webchat.freenode.net/?channels=sway&uio=d4) (#sway на
-irc.freenode.net).
+IRC](https://web.libera.chat/gamja/?channels=#sway) (#sway на
+irc.libera.chat).
 
 ## Підтримка українською мовою
 
@@ -15,7 +15,7 @@ Hummer12007 у IRC-спільноті. Будьте терплячі, вам о�
 
 ## Підписи випусків
 
-Випуски підписані ключем [B22DA89A](http://pgp.mit.edu/pks/lookup?op=vindex&search=0x52CB6609B22DA89A)
+Випуски підписані ключем [E88F5E48](https://keys.openpgp.org/search?q=34FF9526CFEF0E97A340E2E40FDE7BE0E88F5E48)
 та публікуються на сторінці [GitHub](https://github.com/swaywm/sway/releases).
 
 ## Встановлення
@@ -36,10 +36,10 @@ Sway доступний у багатьох дистрибутивах Linux (а
 Встановіть залежності:
 
 * meson \*
-* [wlroots](https://github.com/swaywm/wlroots)
+* [wlroots](https://gitlab.freedesktop.org/wlroots/wlroots)
 * wayland
 * wayland-protocols \*
-* pcre
+* pcre2
 * json-c
 * pango
 * cairo

@@ -2,12 +2,12 @@
 
 Sway is een [i3](https://i3wm.org/)-compatibele [Wayland](http://wayland.freedesktop.org/) compositor.
 Lees de [FAQ](https://github.com/swaywm/sway/wiki). Word lid van het [IRC
-kanaal](http://webchat.freenode.net/?channels=sway&uio=d4) (#sway op
-irc.freenode.net).
+kanaal](https://web.libera.chat/gamja/?channels=#sway) (#sway op
+irc.libera.chat).
 
 ## Releasehandtekeningen
 
-Releases worden ondertekend met [B22DA89A](http://pgp.mit.edu/pks/lookup?op=vindex&search=0x52CB6609B22DA89A)
+Releases worden ondertekend met [E88F5E48](https://keys.openpgp.org/search?q=34FF9526CFEF0E97A340E2E40FDE7BE0E88F5E48)
 en gepubliceerd [op GitHub](https://github.com/swaywm/sway/releases).
 
 ## Installatie
@@ -25,10 +25,10 @@ kanaal of stuur een e-mail naar sir@cmpwn.com voor advies.
 Afhankelijkheden installeren:
 
 * meson \*
-* [wlroots](https://github.com/swaywm/wlroots)
+* [wlroots](https://gitlab.freedesktop.org/wlroots/wlroots)
 * wayland
 * wayland-protocols \*
-* pcre
+* pcre2
 * json-c
 * pango
 * cairo

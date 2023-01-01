@@ -46,11 +46,13 @@ static const struct cmd_handler handlers[] = {
 	{ "assign", cmd_assign },
 	{ "bar", cmd_bar },
 	{ "bindcode", cmd_bindcode },
+	{ "bindgesture", cmd_bindgesture },
 	{ "bindswitch", cmd_bindswitch },
 	{ "bindsym", cmd_bindsym },
 	{ "client.background", cmd_client_noop },
 	{ "client.focused", cmd_client_focused },
 	{ "client.focused_inactive", cmd_client_focused_inactive },
+	{ "client.focused_tab_title", cmd_client_focused_tab_title },
 	{ "client.placeholder", cmd_client_noop },
 	{ "client.unfocused", cmd_client_unfocused },
 	{ "client.urgent", cmd_client_urgent },
@@ -80,6 +82,7 @@ static const struct cmd_handler handlers[] = {
 	{ "no_focus", cmd_no_focus },
 	{ "output", cmd_output },
 	{ "popup_during_fullscreen", cmd_popup_during_fullscreen },
+	{ "primary_selection", cmd_primary_selection },
 	{ "seat", cmd_seat },
 	{ "set", cmd_set },
 	{ "show_marks", cmd_show_marks },
@@ -92,6 +95,7 @@ static const struct cmd_handler handlers[] = {
 	{ "titlebar_padding", cmd_titlebar_padding },
 	{ "titlebar_position", cmd_titlebar_position },
 	{ "unbindcode", cmd_unbindcode },
+	{ "unbindgesture", cmd_unbindgesture },
 	{ "unbindswitch", cmd_unbindswitch },
 	{ "unbindsym", cmd_unbindsym },
 	{ "workspace", cmd_workspace },
@@ -407,6 +411,7 @@ struct cmd_results *config_command(char *exec, char **new_block) {
 				&& handler->handle != cmd_bindsym
 				&& handler->handle != cmd_bindcode
 				&& handler->handle != cmd_bindswitch
+				&& handler->handle != cmd_bindgesture
 				&& handler->handle != cmd_set
 				&& handler->handle != cmd_for_window
 				&& (*argv[i] == '\"' || *argv[i] == '\'')) {
@@ -466,34 +471,6 @@ struct cmd_results *config_commands_command(char *exec) {
 		goto cleanup;
 	}
 
-	enum command_context context = 0;
-
-	struct {
-		char *name;
-		enum command_context context;
-	} context_names[] = {
-		{ "config", CONTEXT_CONFIG },
-		{ "binding", CONTEXT_BINDING },
-		{ "ipc", CONTEXT_IPC },
-		{ "criteria", CONTEXT_CRITERIA },
-		{ "all", CONTEXT_ALL },
-	};
-
-	for (int i = 1; i < argc; ++i) {
-		size_t j;
-		for (j = 0; j < sizeof(context_names) / sizeof(context_names[0]); ++j) {
-			if (strcmp(context_names[j].name, argv[i]) == 0) {
-				break;
-			}
-		}
-		if (j == sizeof(context_names) / sizeof(context_names[0])) {
-			results = cmd_results_new(CMD_INVALID,
-					"Invalid command context %s", argv[i]);
-			goto cleanup;
-		}
-		context |= context_names[j].context;
-	}
-
 	results = cmd_results_new(CMD_SUCCESS, NULL);
 
 cleanup:
@@ -510,13 +487,19 @@ struct cmd_results *cmd_results_new(enum cmd_status status,
 	}
 	results->status = status;
 	if (format) {
-		char *error = malloc(256);
+		char *error = NULL;
 		va_list args;
 		va_start(args, format);
-		if (error) {
-			vsnprintf(error, 256, format, args);
-		}
+		int slen = vsnprintf(NULL, 0, format, args);
 		va_end(args);
+		if (slen > 0) {
+			error = malloc(slen + 1);
+			if (error != NULL) {
+				va_start(args, format);
+				vsnprintf(error, slen + 1, format, args);
+				va_end(args);
+			}
+		}
 		results->error = error;
 	} else {
 		results->error = NULL;

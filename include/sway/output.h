@@ -3,7 +3,7 @@
 #include <time.h>
 #include <unistd.h>
 #include <wayland-server-core.h>
-#include <wlr/types/wlr_box.h>
+#include <wlr/types/wlr_damage_ring.h>
 #include <wlr/types/wlr_output.h>
 #include "config.h"
 #include "sway/tree/node.h"
@@ -27,13 +27,13 @@ struct sway_output {
 	struct wlr_box usable_area;
 
 	struct timespec last_frame;
-	struct wlr_output_damage *damage;
+	struct wlr_damage_ring damage_ring;
 
 	int lx, ly; // layout coords
 	int width, height; // transformed buffer size
 	enum wl_output_subpixel detected_subpixel;
 	enum scale_filter_mode scale_filter;
-	// last applied mode when the output is DPMS'ed
+	// last applied mode when the output is powered off
 	struct wlr_output_mode *current_mode;
 
 	bool enabling, enabled;
@@ -43,19 +43,26 @@ struct sway_output {
 
 	struct wl_listener destroy;
 	struct wl_listener commit;
-	struct wl_listener mode;
 	struct wl_listener present;
-	struct wl_listener damage_destroy;
-	struct wl_listener damage_frame;
+	struct wl_listener damage;
+	struct wl_listener frame;
+	struct wl_listener needs_frame;
+	struct wl_listener request_state;
 
 	struct {
-		struct wl_signal destroy;
+		struct wl_signal disable;
 	} events;
 
 	struct timespec last_presentation;
 	uint32_t refresh_nsec;
 	int max_render_time; // In milliseconds
 	struct wl_event_source *repaint_timer;
+};
+
+struct sway_output_non_desktop {
+	struct wlr_output *wlr_output;
+
+	struct wl_listener destroy;
 };
 
 struct sway_output *output_create(struct wlr_output *wlr_output);
@@ -177,5 +184,7 @@ void handle_output_manager_test(struct wl_listener *listener, void *data);
 
 void handle_output_power_manager_set_mode(struct wl_listener *listener,
 	void *data);
+
+struct sway_output_non_desktop *output_non_desktop_create(struct wlr_output *wlr_output);
 
 #endif

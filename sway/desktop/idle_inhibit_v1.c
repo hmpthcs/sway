@@ -1,5 +1,6 @@
 #include <stdlib.h>
 #include <wlr/types/wlr_idle.h>
+#include <wlr/types/wlr_idle_notify_v1.h>
 #include "log.h"
 #include "sway/desktop/idle_inhibit_v1.h"
 #include "sway/input/seat.h"
@@ -69,8 +70,8 @@ struct sway_idle_inhibitor_v1 *sway_idle_inhibit_v1_user_inhibitor_for_view(
 	struct sway_idle_inhibitor_v1 *inhibitor;
 	wl_list_for_each(inhibitor, &server.idle_inhibit_manager_v1->inhibitors,
 			link) {
-		if (inhibitor->view == view &&
-				inhibitor->mode != INHIBIT_IDLE_APPLICATION) {
+		if (inhibitor->mode != INHIBIT_IDLE_APPLICATION &&
+				inhibitor->view == view) {
 			return inhibitor;
 		}
 	}
@@ -82,8 +83,8 @@ struct sway_idle_inhibitor_v1 *sway_idle_inhibit_v1_application_inhibitor_for_vi
 	struct sway_idle_inhibitor_v1 *inhibitor;
 	wl_list_for_each(inhibitor, &server.idle_inhibit_manager_v1->inhibitors,
 			link) {
-		if (inhibitor->view == view &&
-				inhibitor->mode == INHIBIT_IDLE_APPLICATION) {
+		if (inhibitor->mode == INHIBIT_IDLE_APPLICATION &&
+				view_from_wlr_surface(inhibitor->wlr_inhibitor->surface) == view) {
 			return inhibitor;
 		}
 	}
@@ -140,6 +141,7 @@ void sway_idle_inhibit_v1_check_active(
 		}
 	}
 	wlr_idle_set_enabled(manager->idle, NULL, !inhibited);
+	wlr_idle_notifier_v1_set_inhibited(server.idle_notifier_v1, inhibited);
 }
 
 struct sway_idle_inhibit_manager_v1 *sway_idle_inhibit_manager_v1_create(

@@ -53,7 +53,7 @@ The following sizing options can also be set:
 *message-padding=<padding>*
 	Set the padding for the message.
 
-*details-gackground=<color>*
+*details-background=<color>*
 	The background color for the details.
 
 *details-border-size=<size>*
@@ -78,6 +78,9 @@ Additionally, the following options can be assigned a default per-type:
 
 *edge=top|bottom*
 	Set the edge to use.
+
+*layer=overlay|top|bottom|background*
+	Set the layer to use.
 
 *font=<font>*
 	Set the font to use.

@@ -9,6 +9,7 @@ packages:
   - libxkbcommon
   - meson
   - pango
+  - pcre2
   - scdoc
   - wayland
   - wayland-protocols
@@ -16,9 +17,10 @@ packages:
   - xcb-util-wm
   - xorg-xwayland
   - seatd
+  - hwdata
 sources:
   - https://github.com/swaywm/sway
-  - https://github.com/swaywm/wlroots
+  - https://gitlab.freedesktop.org/wlroots/wlroots.git
 tasks:
   - wlroots: |
       cd wlroots
@@ -27,7 +29,7 @@ tasks:
       sudo ninja -C build install
   - setup: |
       cd sway
-      meson build -Dauto_features=enabled -Dsd-bus-provider=libsystemd
+      meson build --fatal-meson-warnings -Dauto_features=enabled -Dsd-bus-provider=libsystemd
   - build: |
       cd sway
       ninja -C build

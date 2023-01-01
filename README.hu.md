@@ -1,6 +1,6 @@
 # sway
 
-A Sway egy [i3]-kompatibilis [Wayland] kompozitor. Olvasd el a [Gyarkan Ismételt Kérdéseket][FAQ]. Csatlakozz az [IRC csatornához][IRC channel] \(`#sway` az `irc.freenode.net`-en).
+A Sway egy [i3]-kompatibilis [Wayland] kompozitor. Olvasd el a [Gyarkan Ismételt Kérdéseket][FAQ]. Csatlakozz az [IRC csatornához][IRC channel] \(`#sway` az `irc.libera.chat`-en).
 
 ## Csomag aláírások
 
@@ -28,7 +28,7 @@ Telepítsd a függőségeket:
 * [wlroots]
 * wayland
 * wayland-protocols \*
-* pcre
+* pcre2
 * json-c
 * pango
 * cairo
@@ -69,9 +69,9 @@ gdm-ről ismeretes, hogy egész jól működik.)
 [i3]: https://i3wm.org/
 [Wayland]: http://wayland.freedesktop.org/
 [FAQ]: https://github.com/swaywm/sway/wiki
-[IRC channel]: http://webchat.freenode.net/?channels=sway&uio=d4
+[IRC channel]: https://web.libera.chat/gamja/?channels=#sway
 [E88F5E48]: https://keys.openpgp.org/search?q=34FF9526CFEF0E97A340E2E40FDE7BE0E88F5E48
 [GitHub releases]: https://github.com/swaywm/sway/releases
 [Development setup]: https://github.com/swaywm/sway/wiki/Development-Setup
-[wlroots]: https://github.com/swaywm/wlroots
+[wlroots]: https://gitlab.freedesktop.org/wlroots/wlroots
 [scdoc]: https://git.sr.ht/~sircmpwn/scdoc

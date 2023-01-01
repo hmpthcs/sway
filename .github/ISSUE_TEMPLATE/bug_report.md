@@ -6,7 +6,7 @@ labels: 'bug'
 ---
 
 ### Please read the following before submitting:
-- Please do NOT submit bug reports for questions. Ask questions on IRC at #sway on irc.freenode.net.
+- Please do NOT submit bug reports for questions. Ask questions on IRC at #sway on Libera Chat.
 - Proprietary graphics drivers, including nvidia, are not supported. Please use the open source equivalents, such as nouveau, if you would like to use Sway.
 - Please do NOT submit issues for information from the github wiki. The github wiki is community maintained and therefore may contain outdated information, scripts that don't work or obsolete workarounds.
   If you fix a script or find outdated information, don't hesitate to adjust the wiki page.
@@ -18,6 +18,7 @@ labels: 'bug'
 - **Debug Log:**
   - Run `sway -d 2> ~/sway.log` from a TTY and upload it to a pastebin, such as gist.github.com.
   - This will record information about sway's activity. Please try to keep the reproduction as brief as possible and exit sway.
+  - Attach the **full** file, do not truncate it.
 
 - **Configuration File:**
   - Please try to produce with the default configuration.

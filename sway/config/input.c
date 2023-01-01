@@ -25,11 +25,13 @@ struct input_config *new_input_config(const char* identifier) {
 	input->drag = INT_MIN;
 	input->drag_lock = INT_MIN;
 	input->dwt = INT_MIN;
+	input->dwtp = INT_MIN;
 	input->send_events = INT_MIN;
 	input->click_method = INT_MIN;
 	input->middle_emulation = INT_MIN;
 	input->natural_scroll = INT_MIN;
 	input->accel_profile = INT_MIN;
+	input->rotation_angle = FLT_MIN;
 	input->pointer_accel = FLT_MIN;
 	input->scroll_factor = FLT_MIN;
 	input->scroll_button = INT_MIN;
@@ -61,6 +63,9 @@ void merge_input_config(struct input_config *dst, struct input_config *src) {
 	if (src->dwt != INT_MIN) {
 		dst->dwt = src->dwt;
 	}
+	if (src->dwtp != INT_MIN) {
+		dst->dwtp = src->dwtp;
+	}
 	if (src->left_handed != INT_MIN) {
 		dst->left_handed = src->left_handed;
 	}
@@ -69,6 +74,9 @@ void merge_input_config(struct input_config *dst, struct input_config *src) {
 	}
 	if (src->natural_scroll != INT_MIN) {
 		dst->natural_scroll = src->natural_scroll;
+	}
+	if (src->rotation_angle != FLT_MIN) {
+		dst->rotation_angle = src->rotation_angle;
 	}
 	if (src->pointer_accel != FLT_MIN) {
 		dst->pointer_accel = src->pointer_accel;

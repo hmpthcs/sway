@@ -4,15 +4,15 @@
 #include <strings.h>
 #include <time.h>
 #include <wayland-server-core.h>
+#include <wlr/config.h>
+#include <wlr/backend/headless.h>
 #include <wlr/render/wlr_renderer.h>
-#include <wlr/types/wlr_box.h>
 #include <wlr/types/wlr_buffer.h>
 #include <wlr/types/wlr_matrix.h>
-#include <wlr/types/wlr_output_damage.h>
 #include <wlr/types/wlr_output_layout.h>
 #include <wlr/types/wlr_output.h>
 #include <wlr/types/wlr_presentation_time.h>
-#include <wlr/types/wlr_surface.h>
+#include <wlr/types/wlr_compositor.h>
 #include <wlr/util/region.h>
 #include "config.h"
 #include "log.h"
@@ -29,6 +29,11 @@
 #include "sway/tree/root.h"
 #include "sway/tree/view.h"
 #include "sway/tree/workspace.h"
+
+#if WLR_HAS_DRM_BACKEND
+#include <wlr/backend/drm.h>
+#include <wlr/types/wlr_drm_lease_v1.h>
+#endif
 
 struct sway_output *output_by_name_or_id(const char *name_or_id) {
 	for (int i = 0; i < root->outputs->length; ++i) {
@@ -273,6 +278,25 @@ static void for_each_surface_container_iterator(struct sway_container *con,
 
 static void output_for_each_surface(struct sway_output *output,
 		sway_surface_iterator_func_t iterator, void *user_data) {
+	if (server.session_lock.locked) {
+		if (server.session_lock.lock == NULL) {
+			return;
+		}
+		struct wlr_session_lock_surface_v1 *lock_surface;
+		wl_list_for_each(lock_surface, &server.session_lock.lock->surfaces, link) {
+			if (lock_surface->output != output->wlr_output) {
+				continue;
+			}
+			if (!lock_surface->mapped) {
+				continue;
+			}
+
+			output_surface_for_each_surface(output, lock_surface->surface,
+				0.0, 0.0, iterator, user_data);
+		}
+		return;
+	}
+
 	if (output_has_opaque_overlay_layer_surface(output)) {
 		goto overlay;
 	}
@@ -432,6 +456,10 @@ static bool scan_out_fullscreen_view(struct sway_output *output,
 		return false;
 	}
 
+	if (server.session_lock.locked) {
+		return false;
+	}
+
 	if (!wl_list_empty(&view->saved_buffers)) {
 		return false;
 	}
@@ -506,7 +534,7 @@ static int output_repaint_timer_handler(void *data) {
 		fullscreen_con = workspace->current.fullscreen;
 	}
 
-	if (fullscreen_con && fullscreen_con->view) {
+	if (fullscreen_con && fullscreen_con->view && !debug.noscanout) {
 		// Try to scan-out the fullscreen view
 		static bool last_scanned_out = false;
 		bool scanned_out =
@@ -528,31 +556,43 @@ static int output_repaint_timer_handler(void *data) {
 		}
 	}
 
-	bool needs_frame;
-	pixman_region32_t damage;
-	pixman_region32_init(&damage);
-	if (!wlr_output_damage_attach_render(output->damage,
-			&needs_frame, &damage)) {
+	int buffer_age;
+	if (!wlr_output_attach_render(output->wlr_output, &buffer_age)) {
 		return 0;
 	}
 
-	if (needs_frame) {
-		struct timespec now;
-		clock_gettime(CLOCK_MONOTONIC, &now);
-
-		output_render(output, &now, &damage);
-	} else {
+	pixman_region32_t damage;
+	pixman_region32_init(&damage);
+	wlr_damage_ring_get_buffer_damage(&output->damage_ring, buffer_age, &damage);
+	if (!output->wlr_output->needs_frame &&
+			!pixman_region32_not_empty(&output->damage_ring.current)) {
+		pixman_region32_fini(&damage);
 		wlr_output_rollback(output->wlr_output);
+		return 0;
 	}
+
+	struct timespec now;
+	clock_gettime(CLOCK_MONOTONIC, &now);
+
+	output_render(output, &now, &damage);
 
 	pixman_region32_fini(&damage);
 
 	return 0;
 }
 
-static void damage_handle_frame(struct wl_listener *listener, void *user_data) {
+static void handle_damage(struct wl_listener *listener, void *user_data) {
 	struct sway_output *output =
-		wl_container_of(listener, output, damage_frame);
+		wl_container_of(listener, output, damage);
+	struct wlr_output_event_damage *event = user_data;
+	if (wlr_damage_ring_add(&output->damage_ring, event->damage)) {
+		wlr_output_schedule_frame(output->wlr_output);
+	}
+}
+
+static void handle_frame(struct wl_listener *listener, void *user_data) {
+	struct sway_output *output =
+		wl_container_of(listener, output, frame);
 	if (!output->enabled || !output->wlr_output->enabled) {
 		return;
 	}
@@ -615,11 +655,18 @@ static void damage_handle_frame(struct wl_listener *listener, void *user_data) {
 	send_frame_done(output, &data);
 }
 
+static void handle_needs_frame(struct wl_listener *listener, void *user_data) {
+	struct sway_output *output =
+		wl_container_of(listener, output, needs_frame);
+	wlr_output_schedule_frame(output->wlr_output);
+}
+
 void output_damage_whole(struct sway_output *output) {
 	// The output can exist with no wlr_output if it's just been disconnected
 	// and the transaction to evacuate it has't completed yet.
-	if (output && output->wlr_output && output->damage) {
-		wlr_output_damage_add_whole(output->damage);
+	if (output != NULL && output->wlr_output != NULL) {
+		wlr_damage_ring_add_whole(&output->damage_ring);
+		wlr_output_schedule_frame(output->wlr_output);
 	}
 }
 
@@ -632,24 +679,26 @@ static void damage_surface_iterator(struct sway_output *output,
 	struct wlr_box box = *_box;
 	scale_box(&box, output->wlr_output->scale);
 
-	if (pixman_region32_not_empty(&surface->buffer_damage)) {
-		pixman_region32_t damage;
-		pixman_region32_init(&damage);
-		wlr_surface_get_effective_damage(surface, &damage);
-		wlr_region_scale(&damage, &damage, output->wlr_output->scale);
-		if (ceil(output->wlr_output->scale) > surface->current.scale) {
-			// When scaling up a surface, it'll become blurry so we need to
-			// expand the damage region
-			wlr_region_expand(&damage, &damage,
-				ceil(output->wlr_output->scale) - surface->current.scale);
-		}
-		pixman_region32_translate(&damage, box.x, box.y);
-		wlr_output_damage_add(output->damage, &damage);
-		pixman_region32_fini(&damage);
+	pixman_region32_t damage;
+	pixman_region32_init(&damage);
+	wlr_surface_get_effective_damage(surface, &damage);
+	wlr_region_scale(&damage, &damage, output->wlr_output->scale);
+	if (ceil(output->wlr_output->scale) > surface->current.scale) {
+		// When scaling up a surface, it'll become blurry so we need to
+		// expand the damage region
+		wlr_region_expand(&damage, &damage,
+			ceil(output->wlr_output->scale) - surface->current.scale);
 	}
+	pixman_region32_translate(&damage, box.x, box.y);
+	if (wlr_damage_ring_add(&output->damage_ring, &damage)) {
+		wlr_output_schedule_frame(output->wlr_output);
+	}
+	pixman_region32_fini(&damage);
 
 	if (whole) {
-		wlr_output_damage_add_box(output->damage, &box);
+		if (wlr_damage_ring_add_box(&output->damage_ring, &box)) {
+			wlr_output_schedule_frame(output->wlr_output);
+		}
 	}
 
 	if (!wl_list_empty(&surface->current.frame_callback_list)) {
@@ -679,7 +728,9 @@ void output_damage_box(struct sway_output *output, struct wlr_box *_box) {
 	box.x -= output->lx;
 	box.y -= output->ly;
 	scale_box(&box, output->wlr_output->scale);
-	wlr_output_damage_add_box(output->damage, &box);
+	if (wlr_damage_ring_add_box(&output->damage_ring, &box)) {
+		wlr_output_schedule_frame(output->wlr_output);
+	}
 }
 
 static void damage_child_views_iterator(struct sway_container *con,
@@ -703,7 +754,9 @@ void output_damage_whole_container(struct sway_output *output,
 		.height = con->current.height + 2,
 	};
 	scale_box(&box, output->wlr_output->scale);
-	wlr_output_damage_add_box(output->damage, &box);
+	if (wlr_damage_ring_add_box(&output->damage_ring, &box)) {
+		wlr_output_schedule_frame(output->wlr_output);
+	}
 	// Damage subsurfaces as well, which may extend outside the box
 	if (con->view) {
 		damage_child_views_iterator(con, output);
@@ -712,39 +765,26 @@ void output_damage_whole_container(struct sway_output *output,
 	}
 }
 
-static void damage_handle_destroy(struct wl_listener *listener, void *data) {
-	struct sway_output *output =
-		wl_container_of(listener, output, damage_destroy);
-	if (!output->enabled) {
-		return;
-	}
-	output_disable(output);
-
-	wl_list_remove(&output->damage_destroy.link);
-	wl_list_remove(&output->damage_frame.link);
-
-	transaction_commit_dirty();
-}
-
 static void update_output_manager_config(struct sway_server *server) {
 	struct wlr_output_configuration_v1 *config =
 		wlr_output_configuration_v1_create();
 
 	struct sway_output *output;
 	wl_list_for_each(output, &root->all_outputs, link) {
-		if (output == root->noop_output) {
+		if (output == root->fallback_output) {
 			continue;
 		}
 		struct wlr_output_configuration_head_v1 *config_head =
 			wlr_output_configuration_head_v1_create(config, output->wlr_output);
-		struct wlr_box *output_box = wlr_output_layout_get_box(
-			root->output_layout, output->wlr_output);
-		// We mark the output enabled even if it is switched off by DPMS
+		struct wlr_box output_box;
+		wlr_output_layout_get_box(root->output_layout,
+			output->wlr_output, &output_box);
+		// We mark the output enabled when it's switched off but not disabled
 		config_head->state.enabled = output->current_mode != NULL && output->enabled;
 		config_head->state.mode = output->current_mode;
-		if (output_box) {
-			config_head->state.x = output_box->x;
-			config_head->state.y = output_box->y;
+		if (!wlr_box_empty(&output_box)) {
+			config_head->state.x = output_box.x;
+			config_head->state.y = output_box.y;
 		}
 	}
 
@@ -754,25 +794,34 @@ static void update_output_manager_config(struct sway_server *server) {
 static void handle_destroy(struct wl_listener *listener, void *data) {
 	struct sway_output *output = wl_container_of(listener, output, destroy);
 	struct sway_server *server = output->server;
-	wl_signal_emit(&output->events.destroy, output);
 
 	if (output->enabled) {
 		output_disable(output);
 	}
+
 	output_begin_destroy(output);
+
+	wl_list_remove(&output->link);
 
 	wl_list_remove(&output->destroy.link);
 	wl_list_remove(&output->commit.link);
-	wl_list_remove(&output->mode.link);
 	wl_list_remove(&output->present.link);
+	wl_list_remove(&output->damage.link);
+	wl_list_remove(&output->frame.link);
+	wl_list_remove(&output->needs_frame.link);
+	wl_list_remove(&output->request_state.link);
+
+	wlr_damage_ring_finish(&output->damage_ring);
+
+	output->wlr_output->data = NULL;
+	output->wlr_output = NULL;
 
 	transaction_commit_dirty();
 
 	update_output_manager_config(server);
 }
 
-static void handle_mode(struct wl_listener *listener, void *data) {
-	struct sway_output *output = wl_container_of(listener, output, mode);
+static void handle_mode(struct sway_output *output) {
 	if (!output->enabled && !output->enabling) {
 		struct output_config *oc = find_output_config(output);
 		if (output->wlr_output->current_mode != NULL &&
@@ -789,9 +838,15 @@ static void handle_mode(struct wl_listener *listener, void *data) {
 	if (!output->enabled) {
 		return;
 	}
+
 	arrange_layers(output);
 	arrange_output(output);
 	transaction_commit_dirty();
+
+	int width, height;
+	wlr_output_transformed_resolution(output->wlr_output, &width, &height);
+	wlr_damage_ring_set_bounds(&output->damage_ring, width, height);
+	wlr_output_schedule_frame(output->wlr_output);
 
 	update_output_manager_config(output->server);
 }
@@ -804,6 +859,10 @@ static void update_textures(struct sway_container *con, void *data) {
 static void handle_commit(struct wl_listener *listener, void *data) {
 	struct sway_output *output = wl_container_of(listener, output, commit);
 	struct wlr_output_event_commit *event = data;
+
+	if (event->committed & WLR_OUTPUT_STATE_MODE) {
+		handle_mode(output);
+	}
 
 	if (!output->enabled) {
 		return;
@@ -820,13 +879,20 @@ static void handle_commit(struct wl_listener *listener, void *data) {
 
 		update_output_manager_config(output->server);
 	}
+
+	if (event->committed & (WLR_OUTPUT_STATE_MODE | WLR_OUTPUT_STATE_TRANSFORM)) {
+		int width, height;
+		wlr_output_transformed_resolution(output->wlr_output, &width, &height);
+		wlr_damage_ring_set_bounds(&output->damage_ring, width, height);
+		wlr_output_schedule_frame(output->wlr_output);
+	}
 }
 
 static void handle_present(struct wl_listener *listener, void *data) {
 	struct sway_output *output = wl_container_of(listener, output, present);
 	struct wlr_output_event_present *output_event = data;
 
-	if (!output->enabled) {
+	if (!output->enabled || !output_event->presented) {
 		return;
 	}
 
@@ -834,30 +900,72 @@ static void handle_present(struct wl_listener *listener, void *data) {
 	output->refresh_nsec = output_event->refresh;
 }
 
+static void handle_request_state(struct wl_listener *listener, void *data) {
+	struct sway_output *output =
+		wl_container_of(listener, output, request_state);
+	const struct wlr_output_event_request_state *event = data;
+	wlr_output_commit_state(output->wlr_output, event->state);
+}
+
+static unsigned int last_headless_num = 0;
+
 void handle_new_output(struct wl_listener *listener, void *data) {
 	struct sway_server *server = wl_container_of(listener, server, new_output);
 	struct wlr_output *wlr_output = data;
-	sway_log(SWAY_DEBUG, "New output %p: %s", wlr_output, wlr_output->name);
+
+	if (wlr_output == root->fallback_output->wlr_output) {
+		return;
+	}
+
+	if (wlr_output_is_headless(wlr_output)) {
+		char name[64];
+		snprintf(name, sizeof(name), "HEADLESS-%u", ++last_headless_num);
+		wlr_output_set_name(wlr_output, name);
+	}
+
+	sway_log(SWAY_DEBUG, "New output %p: %s (non-desktop: %d)",
+			wlr_output, wlr_output->name, wlr_output->non_desktop);
+
+	if (wlr_output->non_desktop) {
+		sway_log(SWAY_DEBUG, "Not configuring non-desktop output");
+		struct sway_output_non_desktop *non_desktop = output_non_desktop_create(wlr_output);
+#if WLR_HAS_DRM_BACKEND
+		if (server->drm_lease_manager) {
+			wlr_drm_lease_v1_manager_offer_output(server->drm_lease_manager,
+					wlr_output);
+		}
+#endif
+		list_add(root->non_desktop_outputs, non_desktop);
+		return;
+	}
+
+	if (!wlr_output_init_render(wlr_output, server->allocator,
+			server->renderer)) {
+		sway_log(SWAY_ERROR, "Failed to init output render");
+		return;
+	}
 
 	struct sway_output *output = output_create(wlr_output);
 	if (!output) {
 		return;
 	}
 	output->server = server;
-	output->damage = wlr_output_damage_create(wlr_output);
+	wlr_damage_ring_init(&output->damage_ring);
 
 	wl_signal_add(&wlr_output->events.destroy, &output->destroy);
 	output->destroy.notify = handle_destroy;
 	wl_signal_add(&wlr_output->events.commit, &output->commit);
 	output->commit.notify = handle_commit;
-	wl_signal_add(&wlr_output->events.mode, &output->mode);
-	output->mode.notify = handle_mode;
 	wl_signal_add(&wlr_output->events.present, &output->present);
 	output->present.notify = handle_present;
-	wl_signal_add(&output->damage->events.frame, &output->damage_frame);
-	output->damage_frame.notify = damage_handle_frame;
-	wl_signal_add(&output->damage->events.destroy, &output->damage_destroy);
-	output->damage_destroy.notify = damage_handle_destroy;
+	wl_signal_add(&wlr_output->events.damage, &output->damage);
+	output->damage.notify = handle_damage;
+	wl_signal_add(&wlr_output->events.frame, &output->frame);
+	output->frame.notify = handle_frame;
+	wl_signal_add(&wlr_output->events.needs_frame, &output->needs_frame);
+	output->needs_frame.notify = handle_needs_frame;
+	wl_signal_add(&wlr_output->events.request_state, &output->request_state);
+	output->request_state.notify = handle_request_state;
 
 	output->repaint_timer = wl_event_loop_add_timer(server->wl_event_loop,
 		output_repaint_timer_handler, output);
@@ -971,10 +1079,10 @@ void handle_output_power_manager_set_mode(struct wl_listener *listener,
 	struct output_config *oc = new_output_config(output->wlr_output->name);
 	switch (event->mode) {
 	case ZWLR_OUTPUT_POWER_V1_MODE_OFF:
-		oc->dpms_state = DPMS_OFF;
+		oc->power = 0;
 		break;
 	case ZWLR_OUTPUT_POWER_V1_MODE_ON:
-		oc->dpms_state = DPMS_ON;
+		oc->power = 1;
 		break;
 	}
 	oc = store_output_config(oc);

@@ -1,10 +1,12 @@
 #define _POSIX_C_SOURCE 200809L
 #include <assert.h>
+#include <drm_fourcc.h>
 #include <stdbool.h>
 #include <string.h>
 #include <sys/socket.h>
 #include <sys/wait.h>
 #include <unistd.h>
+#include <wlr/config.h>
 #include <wlr/types/wlr_cursor.h>
 #include <wlr/types/wlr_output_layout.h>
 #include <wlr/types/wlr_output.h>
@@ -14,6 +16,10 @@
 #include "sway/tree/root.h"
 #include "log.h"
 #include "util.h"
+
+#if WLR_HAS_DRM_BACKEND
+#include <wlr/backend/drm.h>
+#endif
 
 int output_name_cmp(const void *item, const void *data) {
 	const struct output_config *output = item;
@@ -25,8 +31,10 @@ int output_name_cmp(const void *item, const void *data) {
 void output_get_identifier(char *identifier, size_t len,
 		struct sway_output *output) {
 	struct wlr_output *wlr_output = output->wlr_output;
-	snprintf(identifier, len, "%s %s %s", wlr_output->make, wlr_output->model,
-		wlr_output->serial);
+	snprintf(identifier, len, "%s %s %s",
+		wlr_output->make ? wlr_output->make : "Unknown",
+		wlr_output->model ? wlr_output->model : "Unknown",
+		wlr_output->serial ? wlr_output->serial : "Unknown");
 }
 
 const char *sway_output_scale_filter_to_string(enum scale_filter_mode scale_filter) {
@@ -58,6 +66,7 @@ struct output_config *new_output_config(const char *name) {
 	oc->width = oc->height = -1;
 	oc->refresh_rate = -1;
 	oc->custom_mode = -1;
+	oc->drm_mode.type = -1;
 	oc->x = oc->y = -1;
 	oc->scale = -1;
 	oc->scale_filter = SCALE_FILTER_DEFAULT;
@@ -65,6 +74,8 @@ struct output_config *new_output_config(const char *name) {
 	oc->subpixel = WL_OUTPUT_SUBPIXEL_UNKNOWN;
 	oc->max_render_time = -1;
 	oc->adaptive_sync = -1;
+	oc->render_bit_depth = RENDER_BIT_DEPTH_DEFAULT;
+	oc->power = -1;
 	return oc;
 }
 
@@ -99,6 +110,9 @@ void merge_output_config(struct output_config *dst, struct output_config *src) {
 	if (src->custom_mode != -1) {
 		dst->custom_mode = src->custom_mode;
 	}
+	if (src->drm_mode.type != (uint32_t) -1) {
+		memcpy(&dst->drm_mode, &src->drm_mode, sizeof(src->drm_mode));
+	}
 	if (src->transform != -1) {
 		dst->transform = src->transform;
 	}
@@ -107,6 +121,9 @@ void merge_output_config(struct output_config *dst, struct output_config *src) {
 	}
 	if (src->adaptive_sync != -1) {
 		dst->adaptive_sync = src->adaptive_sync;
+	}
+	if (src->render_bit_depth != RENDER_BIT_DEPTH_DEFAULT) {
+		dst->render_bit_depth = src->render_bit_depth;
 	}
 	if (src->background) {
 		free(dst->background);
@@ -120,8 +137,8 @@ void merge_output_config(struct output_config *dst, struct output_config *src) {
 		free(dst->background_fallback);
 		dst->background_fallback = strdup(src->background_fallback);
 	}
-	if (src->dpms_state != 0) {
-		dst->dpms_state = src->dpms_state;
+	if (src->power != -1) {
+		dst->power = src->power;
 	}
 }
 
@@ -180,11 +197,11 @@ static void merge_id_on_name(struct output_config *oc) {
 			list_add(config->output_configs, ion_oc);
 			sway_log(SWAY_DEBUG, "Generated id on name output config \"%s\""
 				" (enabled: %d) (%dx%d@%fHz position %d,%d scale %f "
-				"transform %d) (bg %s %s) (dpms %d) (max render time: %d)",
+				"transform %d) (bg %s %s) (power %d) (max render time: %d)",
 				ion_oc->name, ion_oc->enabled, ion_oc->width, ion_oc->height,
 				ion_oc->refresh_rate, ion_oc->x, ion_oc->y, ion_oc->scale,
 				ion_oc->transform, ion_oc->background,
-				ion_oc->background_option, ion_oc->dpms_state,
+				ion_oc->background_option, ion_oc->power,
 				ion_oc->max_render_time);
 		}
 	}
@@ -225,18 +242,18 @@ struct output_config *store_output_config(struct output_config *oc) {
 	}
 
 	sway_log(SWAY_DEBUG, "Config stored for output %s (enabled: %d) (%dx%d@%fHz "
-		"position %d,%d scale %f subpixel %s transform %d) (bg %s %s) (dpms %d) "
+		"position %d,%d scale %f subpixel %s transform %d) (bg %s %s) (power %d) "
 		"(max render time: %d)",
 		oc->name, oc->enabled, oc->width, oc->height, oc->refresh_rate,
 		oc->x, oc->y, oc->scale, sway_wl_output_subpixel_to_string(oc->subpixel),
-		oc->transform, oc->background, oc->background_option, oc->dpms_state,
+		oc->transform, oc->background, oc->background_option, oc->power,
 		oc->max_render_time);
 
 	return oc;
 }
 
-static void set_mode(struct wlr_output *output, int width, int height,
-		float refresh_rate, bool custom) {
+static void set_mode(struct wlr_output *output, struct wlr_output_state *pending,
+		int width, int height, float refresh_rate, bool custom) {
 	// Not all floating point integers can be represented exactly
 	// as (int)(1000 * mHz / 1000.f)
 	// round() the result to avoid any error
@@ -244,7 +261,7 @@ static void set_mode(struct wlr_output *output, int width, int height,
 
 	if (wl_list_empty(&output->modes) || custom) {
 		sway_log(SWAY_DEBUG, "Assigning custom mode to %s", output->name);
-		wlr_output_set_custom_mode(output, width, height,
+		wlr_output_state_set_custom_mode(pending, width, height,
 			refresh_rate > 0 ? mhz : 0);
 		return;
 	}
@@ -268,7 +285,24 @@ static void set_mode(struct wlr_output *output, int width, int height,
 	} else {
 		sway_log(SWAY_DEBUG, "Assigning configured mode to %s", output->name);
 	}
-	wlr_output_set_mode(output, best);
+	wlr_output_state_set_mode(pending, best);
+}
+
+static void set_modeline(struct wlr_output *output,
+		struct wlr_output_state *pending, drmModeModeInfo *drm_mode) {
+#if WLR_HAS_DRM_BACKEND
+	if (!wlr_output_is_drm(output)) {
+		sway_log(SWAY_ERROR, "Modeline can only be set to DRM output");
+		return;
+	}
+	sway_log(SWAY_DEBUG, "Assigning custom modeline to %s", output->name);
+	struct wlr_output_mode *mode = wlr_drm_connector_add_mode(output, drm_mode);
+	if (mode) {
+		wlr_output_state_set_mode(pending, mode);
+	}
+#else
+	sway_log(SWAY_ERROR, "Modeline can only be set to DRM output");
+#endif
 }
 
 /* Some manufacturers hardcode the aspect-ratio of the output in the physical
@@ -289,23 +323,24 @@ static bool phys_size_is_aspect_ratio(struct wlr_output *output) {
 // 1 inch = 25.4 mm
 #define MM_PER_INCH 25.4
 
-static int compute_default_scale(struct wlr_output *output) {
+static int compute_default_scale(struct wlr_output *output,
+		struct wlr_output_state *pending) {
 	struct wlr_box box = { .width = output->width, .height = output->height };
-	if (output->pending.committed & WLR_OUTPUT_STATE_MODE) {
-		switch (output->pending.mode_type) {
+	if (pending->committed & WLR_OUTPUT_STATE_MODE) {
+		switch (pending->mode_type) {
 		case WLR_OUTPUT_STATE_MODE_FIXED:
-			box.width = output->pending.mode->width;
-			box.height = output->pending.mode->height;
+			box.width = pending->mode->width;
+			box.height = pending->mode->height;
 			break;
 		case WLR_OUTPUT_STATE_MODE_CUSTOM:
-			box.width = output->pending.custom_mode.width;
-			box.height = output->pending.custom_mode.height;
+			box.width = pending->custom_mode.width;
+			box.height = pending->custom_mode.height;
 			break;
 		}
 	}
 	enum wl_output_transform transform = output->transform;
-	if (output->pending.committed & WLR_OUTPUT_STATE_TRANSFORM) {
-		transform = output->pending.transform;
+	if (pending->committed & WLR_OUTPUT_STATE_TRANSFORM) {
+		transform = pending->transform;
 	}
 	wlr_box_transform(&box, &box, transform, box.width, box.height);
 
@@ -334,42 +369,90 @@ static int compute_default_scale(struct wlr_output *output) {
 	return 2;
 }
 
+/* Lists of formats to try, in order, when a specific render bit depth has
+ * been asked for. The second to last format in each list should always
+ * be XRGB8888, as a reliable backup in case the others are not available;
+ * the last should be DRM_FORMAT_INVALID, to indicate the end of the list. */
+static const uint32_t *bit_depth_preferences[] = {
+	[RENDER_BIT_DEPTH_8] = (const uint32_t []){
+		DRM_FORMAT_XRGB8888,
+		DRM_FORMAT_INVALID,
+	},
+	[RENDER_BIT_DEPTH_10] = (const uint32_t []){
+		DRM_FORMAT_XRGB2101010,
+		DRM_FORMAT_XBGR2101010,
+		DRM_FORMAT_XRGB8888,
+		DRM_FORMAT_INVALID,
+	},
+};
+
 static void queue_output_config(struct output_config *oc,
-		struct sway_output *output) {
-	if (output == root->noop_output) {
+		struct sway_output *output, struct wlr_output_state *pending) {
+	if (output == root->fallback_output) {
 		return;
 	}
 
 	struct wlr_output *wlr_output = output->wlr_output;
 
-	if (oc && (!oc->enabled || oc->dpms_state == DPMS_OFF)) {
+	if (oc && (!oc->enabled || oc->power == 0)) {
 		sway_log(SWAY_DEBUG, "Turning off output %s", wlr_output->name);
-		wlr_output_enable(wlr_output, false);
+		wlr_output_state_set_enabled(pending, false);
 		return;
 	}
 
 	sway_log(SWAY_DEBUG, "Turning on output %s", wlr_output->name);
-	wlr_output_enable(wlr_output, true);
+	wlr_output_state_set_enabled(pending, true);
 
-	if (oc && oc->width > 0 && oc->height > 0) {
+	if (oc && oc->drm_mode.type != 0 && oc->drm_mode.type != (uint32_t) -1) {
+		sway_log(SWAY_DEBUG, "Set %s modeline",
+			wlr_output->name);
+		set_modeline(wlr_output, pending, &oc->drm_mode);
+	} else if (oc && oc->width > 0 && oc->height > 0) {
 		sway_log(SWAY_DEBUG, "Set %s mode to %dx%d (%f Hz)",
 			wlr_output->name, oc->width, oc->height, oc->refresh_rate);
-		set_mode(wlr_output, oc->width, oc->height,
+		set_mode(wlr_output, pending, oc->width, oc->height,
 			oc->refresh_rate, oc->custom_mode == 1);
 	} else if (!wl_list_empty(&wlr_output->modes)) {
-		struct wlr_output_mode *mode = wlr_output_preferred_mode(wlr_output);
-		wlr_output_set_mode(wlr_output, mode);
+		sway_log(SWAY_DEBUG, "Set preferred mode");
+		struct wlr_output_mode *preferred_mode =
+			wlr_output_preferred_mode(wlr_output);
+		wlr_output_state_set_mode(pending, preferred_mode);
+
+		if (!wlr_output_test_state(wlr_output, pending)) {
+			sway_log(SWAY_DEBUG, "Preferred mode rejected, "
+				"falling back to another mode");
+			struct wlr_output_mode *mode;
+			wl_list_for_each(mode, &wlr_output->modes, link) {
+				if (mode == preferred_mode) {
+					continue;
+				}
+
+				wlr_output_state_set_mode(pending, mode);
+				if (wlr_output_test_state(wlr_output, pending)) {
+					break;
+				}
+			}
+		}
 	}
 
 	if (oc && (oc->subpixel != WL_OUTPUT_SUBPIXEL_UNKNOWN || config->reloading)) {
 		sway_log(SWAY_DEBUG, "Set %s subpixel to %s", oc->name,
 			sway_wl_output_subpixel_to_string(oc->subpixel));
-		wlr_output_set_subpixel(wlr_output, oc->subpixel);
+		wlr_output_state_set_subpixel(pending, oc->subpixel);
 	}
 
+	enum wl_output_transform tr = WL_OUTPUT_TRANSFORM_NORMAL;
 	if (oc && oc->transform >= 0) {
-		sway_log(SWAY_DEBUG, "Set %s transform to %d", oc->name, oc->transform);
-		wlr_output_set_transform(wlr_output, oc->transform);
+		tr = oc->transform;
+#if WLR_HAS_DRM_BACKEND
+	} else if (wlr_output_is_drm(wlr_output)) {
+		tr = wlr_drm_connector_get_panel_orientation(wlr_output);
+		sway_log(SWAY_DEBUG, "Auto-detected output transform: %d", tr);
+#endif
+	}
+	if (wlr_output->transform != tr) {
+		sway_log(SWAY_DEBUG, "Set %s transform to %d", oc->name, tr);
+		wlr_output_state_set_transform(pending, tr);
 	}
 
 	// Apply the scale last before the commit, because the scale auto-detection
@@ -378,23 +461,43 @@ static void queue_output_config(struct output_config *oc,
 	if (oc && oc->scale > 0) {
 		scale = oc->scale;
 	} else {
-		scale = compute_default_scale(wlr_output);
+		scale = compute_default_scale(wlr_output, pending);
 		sway_log(SWAY_DEBUG, "Auto-detected output scale: %f", scale);
 	}
 	if (scale != wlr_output->scale) {
 		sway_log(SWAY_DEBUG, "Set %s scale to %f", wlr_output->name, scale);
-		wlr_output_set_scale(wlr_output, scale);
+		wlr_output_state_set_scale(pending, scale);
 	}
 
 	if (oc && oc->adaptive_sync != -1) {
 		sway_log(SWAY_DEBUG, "Set %s adaptive sync to %d", wlr_output->name,
 			oc->adaptive_sync);
-		wlr_output_enable_adaptive_sync(wlr_output, oc->adaptive_sync == 1);
+		wlr_output_state_set_adaptive_sync_enabled(pending, oc->adaptive_sync == 1);
+		if (oc->adaptive_sync == 1 && !wlr_output_test_state(wlr_output, pending)) {
+			sway_log(SWAY_DEBUG, "Adaptive sync failed, ignoring");
+			wlr_output_state_set_adaptive_sync_enabled(pending, false);
+		}
+	}
+
+	if (oc && oc->render_bit_depth != RENDER_BIT_DEPTH_DEFAULT) {
+		const uint32_t *fmts = bit_depth_preferences[oc->render_bit_depth];
+		assert(fmts);
+
+		for (size_t i = 0; fmts[i] != DRM_FORMAT_INVALID; i++) {
+			wlr_output_state_set_render_format(pending, fmts[i]);
+			if (wlr_output_test_state(wlr_output, pending)) {
+				break;
+			}
+
+			sway_log(SWAY_DEBUG, "Preferred output format 0x%08x "
+				"failed to work, falling back to next in "
+				"list, 0x%08x", fmts[i], fmts[i + 1]);
+		}
 	}
 }
 
 bool apply_output_config(struct output_config *oc, struct sway_output *output) {
-	if (output == root->noop_output) {
+	if (output == root->fallback_output) {
 		return false;
 	}
 
@@ -403,14 +506,15 @@ bool apply_output_config(struct output_config *oc, struct sway_output *output) {
 	// Flag to prevent the output mode event handler from calling us
 	output->enabling = (!oc || oc->enabled);
 
-	queue_output_config(oc, output);
+	struct wlr_output_state pending = {0};
+	queue_output_config(oc, output, &pending);
 
-	if (!oc || oc->dpms_state != DPMS_OFF) {
-		output->current_mode = wlr_output->pending.mode;
+	if (!oc || oc->power != 0) {
+		output->current_mode = pending.mode;
 	}
 
 	sway_log(SWAY_DEBUG, "Committing output %s", wlr_output->name);
-	if (!wlr_output_commit(wlr_output)) {
+	if (!wlr_output_commit_state(wlr_output, &pending)) {
 		// Failed to commit output changes, maybe the output is missing a CRTC.
 		// Leave the output disabled for now and try again when the output gets
 		// the mode we asked for.
@@ -462,12 +566,12 @@ bool apply_output_config(struct output_config *oc, struct sway_output *output) {
 	}
 
 	// Update output->{lx, ly, width, height}
-	struct wlr_box *output_box =
-		wlr_output_layout_get_box(root->output_layout, wlr_output);
-	output->lx = output_box->x;
-	output->ly = output_box->y;
-	output->width = output_box->width;
-	output->height = output_box->height;
+	struct wlr_box output_box;
+	wlr_output_layout_get_box(root->output_layout, wlr_output, &output_box);
+	output->lx = output_box.x;
+	output->ly = output_box.y;
+	output->width = output_box.width;
+	output->height = output_box.height;
 
 	if (!output->enabled) {
 		output_enable(output);
@@ -489,19 +593,19 @@ bool apply_output_config(struct output_config *oc, struct sway_output *output) {
 }
 
 bool test_output_config(struct output_config *oc, struct sway_output *output) {
-	if (output == root->noop_output) {
+	if (output == root->fallback_output) {
 		return false;
 	}
 
-	queue_output_config(oc, output);
-	bool ok = wlr_output_test(output->wlr_output);
-	wlr_output_rollback(output->wlr_output);
-	return ok;
+	struct wlr_output_state pending = {0};
+	queue_output_config(oc, output, &pending);
+	return wlr_output_test_state(output->wlr_output, &pending);
 }
 
 static void default_output_config(struct output_config *oc,
 		struct wlr_output *wlr_output) {
 	oc->enabled = 1;
+	oc->power = 1;
 	struct wlr_output_mode *mode = wlr_output_preferred_mode(wlr_output);
 	if (mode != NULL) {
 		oc->width = mode->width;
@@ -514,7 +618,6 @@ static void default_output_config(struct output_config *oc,
 	struct sway_output *output = wlr_output->data;
 	oc->subpixel = output->detected_subpixel;
 	oc->transform = WL_OUTPUT_TRANSFORM_NORMAL;
-	oc->dpms_state = DPMS_ON;
 	oc->max_render_time = 0;
 }
 
@@ -569,10 +672,10 @@ static struct output_config *get_output_config(char *identifier,
 
 		sway_log(SWAY_DEBUG, "Generated output config \"%s\" (enabled: %d)"
 			" (%dx%d@%fHz position %d,%d scale %f transform %d) (bg %s %s)"
-			" (dpms %d) (max render time: %d)", result->name, result->enabled,
+			" (power %d) (max render time: %d)", result->name, result->enabled,
 			result->width, result->height, result->refresh_rate,
 			result->x, result->y, result->scale, result->transform,
-			result->background, result->background_option, result->dpms_state,
+			result->background, result->background_option, result->power,
 			result->max_render_time);
 	} else if (oc_name) {
 		// No identifier config, just return a copy of the name config
@@ -704,6 +807,8 @@ static bool _spawn_swaybg(char **command) {
 		sway_log_errno(SWAY_ERROR, "fork failed");
 		return false;
 	} else if (pid == 0) {
+		restore_nofile_limit();
+
 		pid = fork();
 		if (pid < 0) {
 			sway_log_errno(SWAY_ERROR, "fork failed");

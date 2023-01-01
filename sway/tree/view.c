@@ -6,6 +6,7 @@
 #include <wlr/types/wlr_buffer.h>
 #include <wlr/types/wlr_output_layout.h>
 #include <wlr/types/wlr_server_decoration.h>
+#include <wlr/types/wlr_subcompositor.h>
 #include <wlr/types/wlr_xdg_decoration_v1.h>
 #include "config.h"
 #if HAVE_XWAYLAND
@@ -18,6 +19,7 @@
 #include "sway/desktop.h"
 #include "sway/desktop/transaction.h"
 #include "sway/desktop/idle_inhibit_v1.h"
+#include "sway/desktop/launcher.h"
 #include "sway/input/cursor.h"
 #include "sway/ipc-server.h"
 #include "sway/output.h"
@@ -61,6 +63,8 @@ void view_destroy(struct sway_view *view) {
 		view_remove_saved_buffer(view);
 	}
 	list_free(view->executed_criteria);
+
+	view_assign_ctx(view, NULL);
 
 	free(view->title_format);
 
@@ -272,7 +276,7 @@ void view_autoconfigure(struct sway_view *view) {
 		con->pending.border_bottom = false;
 	}
 
-	if (!container_is_floating(con) && ws) {
+	if (!container_is_floating_or_child(con) && ws) {
 		if (config->hide_edge_borders == E_BOTH
 				|| config->hide_edge_borders == E_VERTICAL) {
 			con->pending.border_left = con->pending.x != ws->x;
@@ -291,14 +295,15 @@ void view_autoconfigure(struct sway_view *view) {
 			(config->hide_edge_borders_smart == ESMART_NO_GAPS &&
 			!gaps_to_edge(view));
 		if (smart) {
-			bool show_border = container_is_floating_or_child(con) ||
-				!view_is_only_visible(view);
+			bool show_border = !view_is_only_visible(view);
 			con->pending.border_left &= show_border;
 			con->pending.border_right &= show_border;
 			con->pending.border_top &= show_border;
 			con->pending.border_bottom &= show_border;
 		}
+	}
 
+	if (!container_is_floating(con)) {
 		// In a tabbed or stacked container, the container's y is the top of the
 		// title area. We have to offset the surface y by the height of the title,
 		// bar, and disable any top border because we'll always have the title bar.
@@ -556,6 +561,20 @@ static void view_populate_pid(struct sway_view *view) {
 	view->pid = pid;
 }
 
+void view_assign_ctx(struct sway_view *view, struct launcher_ctx *ctx) {
+	if (view->ctx) {
+		// This ctx has been replaced
+		launcher_ctx_destroy(view->ctx);
+		view->ctx = NULL;
+	}
+	if (ctx == NULL) {
+		return;
+	}
+	launcher_ctx_consume(ctx);
+
+	view->ctx = ctx;
+}
+
 static struct sway_workspace *select_workspace(struct sway_view *view) {
 	struct sway_seat *seat = input_manager_current_seat();
 
@@ -591,13 +610,14 @@ static struct sway_workspace *select_workspace(struct sway_view *view) {
 	}
 	list_free(criterias);
 	if (ws) {
-		root_remove_workspace_pid(view->pid);
+		view_assign_ctx(view, NULL);
 		return ws;
 	}
 
 	// Check if there's a PID mapping
-	ws = root_workspace_for_pid(view->pid);
+	ws = view->ctx ? launcher_ctx_get_workspace(view->ctx) : NULL;
 	if (ws) {
+		view_assign_ctx(view, NULL);
 		return ws;
 	}
 
@@ -669,6 +689,7 @@ static void handle_foreign_activate_request(
 			break;
 		}
 	}
+	transaction_commit_dirty();
 }
 
 static void handle_foreign_fullscreen_request(
@@ -708,6 +729,7 @@ static void handle_foreign_fullscreen_request(
 			arrange_workspace(container->pending.workspace);
 		}
 	}
+	transaction_commit_dirty();
 }
 
 static void handle_foreign_close_request(
@@ -738,6 +760,13 @@ void view_map(struct sway_view *view, struct wlr_surface *wlr_surface,
 	view_populate_pid(view);
 	view->container = container_create(view);
 
+	if (view->ctx == NULL) {
+		struct launcher_ctx *ctx = launcher_ctx_find_pid(view->pid);
+		if (ctx != NULL) {
+			view_assign_ctx(view, ctx);
+		}
+	}
+
 	// If there is a request to be opened fullscreen on a specific output, try
 	// to honor that request. Otherwise, fallback to assigns, pid mappings,
 	// focused workspace, etc
@@ -751,10 +780,29 @@ void view_map(struct sway_view *view, struct wlr_surface *wlr_surface,
 	}
 
 	struct sway_seat *seat = input_manager_current_seat();
-	struct sway_node *node = ws ? seat_get_focus_inactive(seat, &ws->node)
-		: seat_get_focus_inactive(seat, &root->node);
-	struct sway_container *target_sibling = node->type == N_CONTAINER ?
-		node->sway_container : NULL;
+	struct sway_node *node =
+		seat_get_focus_inactive(seat, ws ? &ws->node : &root->node);
+	struct sway_container *target_sibling = NULL;
+	if (node && node->type == N_CONTAINER) {
+		if (container_is_floating(node->sway_container)) {
+			// If we're about to launch the view into the floating container, then
+			// launch it as a tiled view instead.
+			if (ws) {
+				target_sibling = seat_get_focus_inactive_tiling(seat, ws);
+				if (target_sibling) {
+					struct sway_container *con =
+						seat_get_focus_inactive_view(seat, &target_sibling->node);
+					if (con)  {
+						target_sibling = con;
+					}
+				}
+			} else {
+				ws = seat_get_last_known_workspace(seat);
+			}
+		} else {
+			target_sibling = node->sway_container;
+		}
+	}
 
 	view->foreign_toplevel =
 		wlr_foreign_toplevel_handle_v1_create(server.foreign_toplevel_manager);
@@ -770,13 +818,6 @@ void view_map(struct sway_view *view, struct wlr_surface *wlr_surface,
 	view->foreign_destroy.notify = handle_foreign_destroy;
 	wl_signal_add(&view->foreign_toplevel->events.destroy,
 			&view->foreign_destroy);
-
-	// If we're about to launch the view into the floating container, then
-	// launch it as a tiled view in the root of the workspace instead.
-	if (target_sibling && container_is_floating(target_sibling)) {
-		target_sibling = NULL;
-		ws = seat_get_last_known_workspace(seat);
-	}
 
 	struct sway_container *container = view->container;
 	if (target_sibling) {
@@ -856,7 +897,7 @@ void view_map(struct sway_view *view, struct wlr_surface *wlr_surface,
 }
 
 void view_unmap(struct sway_view *view) {
-	wl_signal_emit(&view->events.unmap, view);
+	wl_signal_emit_mutable(&view->events.unmap, view);
 
 	wl_list_remove(&view->surface_new_subsurface.link);
 
@@ -923,30 +964,19 @@ void view_center_surface(struct sway_view *view) {
 
 static const struct sway_view_child_impl subsurface_impl;
 
-static void subsurface_get_root_coords(struct sway_view_child *child,
-		int *root_sx, int *root_sy) {
+static void subsurface_get_view_coords(struct sway_view_child *child,
+		int *sx, int *sy) {
 	struct wlr_surface *surface = child->surface;
-	*root_sx = -child->view->geometry.x;
-	*root_sy = -child->view->geometry.y;
-
 	if (child->parent && child->parent->impl &&
-			child->parent->impl->get_root_coords) {
-		int sx, sy;
-		child->parent->impl->get_root_coords(child->parent, &sx, &sy);
-		*root_sx += sx;
-		*root_sy += sy;
+			child->parent->impl->get_view_coords) {
+		child->parent->impl->get_view_coords(child->parent, sx, sy);
 	} else {
-		while (surface && wlr_surface_is_subsurface(surface)) {
-			struct wlr_subsurface *subsurface =
-				wlr_subsurface_from_wlr_surface(surface);
-			if (subsurface == NULL) {
-				break;
-			}
-			*root_sx += subsurface->current.x;
-			*root_sy += subsurface->current.y;
-			surface = subsurface->parent;
-		}
+		*sx = *sy = 0;
 	}
+	struct wlr_subsurface *subsurface =
+		wlr_subsurface_from_wlr_surface(surface);
+	*sx += subsurface->current.x;
+	*sy += subsurface->current.y;
 }
 
 static void subsurface_destroy(struct sway_view_child *child) {
@@ -960,7 +990,7 @@ static void subsurface_destroy(struct sway_view_child *child) {
 }
 
 static const struct sway_view_child_impl subsurface_impl = {
-	.get_root_coords = subsurface_get_root_coords,
+	.get_view_coords = subsurface_get_view_coords,
 	.destroy = subsurface_destroy,
 };
 
@@ -1029,10 +1059,12 @@ static void view_child_damage(struct sway_view_child *child, bool whole) {
 		return;
 	}
 	int sx, sy;
-	child->impl->get_root_coords(child, &sx, &sy);
+	child->impl->get_view_coords(child, &sx, &sy);
 	desktop_damage_surface(child->surface,
-			child->view->container->pending.content_x + sx,
-			child->view->container->pending.content_y + sy, whole);
+			child->view->container->pending.content_x -
+				child->view->geometry.x + sx,
+			child->view->container->pending.content_y -
+				child->view->geometry.y + sy, whole);
 }
 
 static void view_child_handle_surface_commit(struct wl_listener *listener,
@@ -1060,7 +1092,12 @@ static void view_child_handle_surface_destroy(struct wl_listener *listener,
 static void view_init_subsurfaces(struct sway_view *view,
 		struct wlr_surface *surface) {
 	struct wlr_subsurface *subsurface;
-	wl_list_for_each(subsurface, &surface->subsurfaces, parent_link) {
+	wl_list_for_each(subsurface, &surface->current.subsurfaces_below,
+			current.link) {
+		view_subsurface_create(view, subsurface);
+	}
+	wl_list_for_each(subsurface, &surface->current.subsurfaces_above,
+			current.link) {
 		view_subsurface_create(view, subsurface);
 	}
 }
@@ -1068,7 +1105,12 @@ static void view_init_subsurfaces(struct sway_view *view,
 static void view_child_init_subsurfaces(struct sway_view_child *view_child,
 		struct wlr_surface *surface) {
 	struct wlr_subsurface *subsurface;
-	wl_list_for_each(subsurface, &surface->subsurfaces, parent_link) {
+	wl_list_for_each(subsurface, &surface->current.subsurfaces_below,
+			current.link) {
+		view_child_subsurface_create(view_child, subsurface);
+	}
+	wl_list_for_each(subsurface, &surface->current.subsurfaces_above,
+			current.link) {
 		view_child_subsurface_create(view_child, subsurface);
 	}
 }
@@ -1123,9 +1165,12 @@ void view_child_init(struct sway_view_child *child,
 	wl_signal_add(&view->events.unmap, &child->view_unmap);
 	child->view_unmap.notify = view_child_handle_view_unmap;
 
-	struct sway_workspace *workspace = child->view->container->pending.workspace;
-	if (workspace) {
-		wlr_surface_send_enter(child->surface, workspace->output->wlr_output);
+	struct sway_container *container = child->view->container;
+	if (container != NULL) {
+		struct sway_workspace *workspace = container->pending.workspace;
+		if (workspace) {
+			wlr_surface_send_enter(child->surface, workspace->output->wlr_output);
+		}
 	}
 
 	view_child_init_subsurfaces(child, surface);
@@ -1287,22 +1332,22 @@ void view_update_title(struct sway_view *view, bool force) {
 
 	free(view->container->title);
 	free(view->container->formatted_title);
-	if (title) {
-		size_t len = parse_title_format(view, NULL);
+
+	size_t len = parse_title_format(view, NULL);
+
+	if (len) {
 		char *buffer = calloc(len + 1, sizeof(char));
 		if (!sway_assert(buffer, "Unable to allocate title string")) {
 			return;
 		}
-		parse_title_format(view, buffer);
 
-		view->container->title = strdup(title);
+		parse_title_format(view, buffer);
 		view->container->formatted_title = buffer;
 	} else {
-		view->container->title = NULL;
 		view->container->formatted_title = NULL;
 	}
-	container_calculate_title_height(view->container);
-	config_update_font_height(false);
+
+	view->container->title = title ? strdup(title) : NULL;
 
 	// Update title after the global font height is updated
 	container_update_title_textures(view->container);
@@ -1418,7 +1463,7 @@ static void view_save_buffer_iterator(struct wlr_surface *surface,
 		saved_buffer->y = view->container->surface_y + sy;
 		saved_buffer->transform = surface->current.transform;
 		wlr_surface_get_buffer_source_box(surface, &saved_buffer->source_box);
-		wl_list_insert(&view->saved_buffers, &saved_buffer->link);
+		wl_list_insert(view->saved_buffers.prev, &saved_buffer->link);
 	}
 }
 

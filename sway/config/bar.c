@@ -91,7 +91,7 @@ struct bar_config *default_bar_config(void) {
 	}
 	bar->outputs = NULL;
 	bar->position = strdup("bottom");
-	bar->pango_markup = false;
+	bar->pango_markup = PANGO_MARKUP_DEFAULT;
 	bar->swaybar_command = NULL;
 	bar->font = NULL;
 	bar->height = 0;
@@ -217,6 +217,9 @@ static void invoke_swaybar(struct bar_config *bar) {
 		sigset_t set;
 		sigemptyset(&set);
 		sigprocmask(SIG_SETMASK, &set, NULL);
+		signal(SIGPIPE, SIG_DFL);
+
+		restore_nofile_limit();
 
 		pid = fork();
 		if (pid < 0) {

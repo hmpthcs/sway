@@ -147,6 +147,10 @@ The following commands may only be used in the configuration file.
 *input* <identifier> dwt enabled|disabled
 	Enables or disables disable-while-typing for the specified input device.
 
+*input* <identifier> dwtp enabled|disabled
+	Enables or disables disable-while-trackpointing for the specified input
+	device.
+
 *input* <identifier> events enabled|disabled|disabled_on_external_mouse|toggle [<toggle-modes>]
 	Enables or disables send_events for specified input device. Disabling
 	send_events disables the input device.
@@ -170,6 +174,10 @@ The following commands may only be used in the configuration file.
 
 *input* <identifier> pointer_accel [<-1|1>]
 	Changes the pointer acceleration for the specified input device.
+
+*input* <identifier> rotation_angle <angle>
+	Sets the rotation angle of the device to the given clockwise angle in
+	degrees. The angle must be between 0.0 (inclusive) and 360.0 (exclusive).
 
 *input* <identifier> scroll_button disable|button[1-3,8,9]|<event-code-or-name>
 	Sets the button used for scroll_method on_button_down. The button can
@@ -233,7 +241,7 @@ correct seat.
 	not explicitly attached to another seat (similar to a "default" seat).
 
 *seat* <name> hide_cursor <timeout>|when-typing [enable|disable]
-	Hides the cursor image after the specified event occured.
+	Hides the cursor image after the specified event occurred.
 
 	If _timeout_ is specified, then the cursor will be hidden after _timeout_
 	(in milliseconds) has elapsed with no activity on the cursor. A timeout of 0
@@ -277,7 +285,7 @@ correct seat.
 	whether future inhibitors are honoured by default, i.e. activated
 	automatically, the default being _enable_. When used at runtime,
 	_disable_ also disables any currently active inhibitors. _activate_,
-	_deactivate_ and _toggle_ are only useable at runtime and change the
+	_deactivate_ and _toggle_ are only usable at runtime and change the
 	state of a potentially existing inhibitor on the currently focused
 	window. This can be used with the current seat alias (_-_) to affect
 	only the currently focused window of the current seat. Subcommand

@@ -4,6 +4,7 @@ packages:
 - devel/json-c
 - devel/libevdev
 - devel/meson
+- devel/pcre2
 - devel/pkgconf
 - graphics/cairo
 - graphics/gdk-pixbuf2
@@ -24,9 +25,11 @@ packages:
 - x11/libX11
 - x11/pixman
 - x11/xcb-util-wm
+- x11-servers/xwayland-devel
+- misc/hwdata
 sources:
 - https://github.com/swaywm/sway
-- https://github.com/swaywm/wlroots
+- https://gitlab.freedesktop.org/wlroots/wlroots.git
 tasks:
 - setup: |
     cd sway
@@ -34,7 +37,7 @@ tasks:
     cd subprojects
     ln -s ../../wlroots wlroots
     cd ..
-    meson build -Dtray=enabled -Dsd-bus-provider=basu
+    meson build --fatal-meson-warnings -Dtray=enabled -Dsd-bus-provider=basu
 - build: |
     cd sway
     ninja -C build

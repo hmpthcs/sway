@@ -51,10 +51,6 @@ static void swaybar_output_free(struct swaybar_output *output) {
 	if (output->surface != NULL) {
 		wl_surface_destroy(output->surface);
 	}
-	if (output->input_region != NULL) {
-		wl_region_destroy(output->input_region);
-	}
-	zxdg_output_v1_destroy(output->xdg_output);
 	wl_output_destroy(output->output);
 	destroy_buffer(&output->buffers[0]);
 	destroy_buffer(&output->buffers[1]);
@@ -114,10 +110,9 @@ static void add_layer_surface(struct swaybar_output *output) {
 
 	if (overlay) {
 		// Empty input region
-		output->input_region = wl_compositor_create_region(bar->compositor);
-		assert(output->input_region);
-
-		wl_surface_set_input_region(output->surface, output->input_region);
+		struct wl_region *region = wl_compositor_create_region(bar->compositor);
+		wl_surface_set_input_region(output->surface, region);
+		wl_region_destroy(region);
 	}
 
 	zwlr_layer_surface_v1_set_anchor(output->layer_surface, config->position);
@@ -172,7 +167,7 @@ bool determine_bar_visibility(struct swaybar *bar, bool moving_layer) {
 		if (bar->status) {
 			sway_log(SWAY_DEBUG, "Sending %s signal to status command",
 					visible ? "cont" : "stop");
-			kill(bar->status->pid, visible ?
+			kill(-bar->status->pid, visible ?
 					bar->status->cont_signal : bar->status->stop_signal);
 		}
 	}
@@ -461,13 +456,28 @@ bool bar_setup(struct swaybar *bar, const char *socket_path) {
 
 static void display_in(int fd, short mask, void *data) {
 	struct swaybar *bar = data;
+	if (mask & (POLLHUP | POLLERR)) {
+		if (mask & POLLERR) {
+			sway_log(SWAY_ERROR, "Wayland display poll error");
+		}
+		bar->running = false;
+		return;
+	}
 	if (wl_display_dispatch(bar->display) == -1) {
+		sway_log(SWAY_ERROR, "wl_display_dispatch failed");
 		bar->running = false;
 	}
 }
 
 static void ipc_in(int fd, short mask, void *data) {
 	struct swaybar *bar = data;
+	if (mask & (POLLHUP | POLLERR)) {
+		if (mask & POLLERR) {
+			sway_log(SWAY_ERROR, "IPC poll error");
+		}
+		bar->running = false;
+		return;
+	}
 	if (handle_ipc_readable(bar)) {
 		set_bar_dirty(bar);
 	}

@@ -10,12 +10,6 @@
 #include "log.h"
 #include "util.h"
 
-uint32_t get_current_time_msec(void) {
-	struct timespec now;
-	clock_gettime(CLOCK_MONOTONIC, &now);
-	return now.tv_sec * 1000 + now.tv_nsec / 1000000;
-}
-
 int wrap(int i, int max) {
 	return ((i % max) + max) % max;
 }
@@ -86,6 +80,12 @@ enum movement_unit parse_movement_unit(const char *unit) {
 
 int parse_movement_amount(int argc, char **argv,
 		struct movement_amount *amount) {
+	if (!sway_assert(argc > 0, "Expected args in parse_movement_amount")) {
+		amount->amount = 0;
+		amount->unit = MOVEMENT_UNIT_INVALID;
+		return 0;
+	}
+
 	char *err;
 	amount->amount = (int)strtol(argv[0], &err, 10);
 	if (*err) {

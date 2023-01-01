@@ -26,7 +26,7 @@
 #include "sway/tree/arrange.h"
 #include "sway/tree/root.h"
 #include "sway/tree/workspace.h"
-#include "cairo.h"
+#include "cairo_util.h"
 #include "pango.h"
 #include "stringop.h"
 #include "list.h"
@@ -81,6 +81,12 @@ static void free_mode(struct sway_mode *mode) {
 			free_switch_binding(mode->switch_bindings->items[i]);
 		}
 		list_free(mode->switch_bindings);
+	}
+	if (mode->gesture_bindings) {
+		for (int i = 0; i < mode->gesture_bindings->length; i++) {
+			free_gesture_binding(mode->gesture_bindings->items[i]);
+		}
+		list_free(mode->gesture_bindings);
 	}
 	free(mode);
 }
@@ -222,6 +228,7 @@ static void config_defaults(struct sway_config *config) {
 	if (!(config->current_mode->keycode_bindings = create_list())) goto cleanup;
 	if (!(config->current_mode->mouse_bindings = create_list())) goto cleanup;
 	if (!(config->current_mode->switch_bindings = create_list())) goto cleanup;
+	if (!(config->current_mode->gesture_bindings = create_list())) goto cleanup;
 	list_add(config->modes, config->current_mode);
 
 	config->floating_mod = 0;
@@ -236,7 +243,7 @@ static void config_defaults(struct sway_config *config) {
 	config->default_layout = L_NONE;
 	config->default_orientation = L_NONE;
 	if (!(config->font = strdup("monospace 10"))) goto cleanup;
-	config->font_height = 17; // height of monospace 10
+	config->font_description = pango_font_description_from_string(config->font);
 	config->urgent_timeout = 500;
 	config->focus_on_window_activation = FOWA_URGENT;
 	config->popup_during_fullscreen = POPUP_SMART;
@@ -267,8 +274,9 @@ static void config_defaults(struct sway_config *config) {
 	config->titlebar_position = TITLEBAR_TOP;
 	config->tiling_drag = true;
 	config->tiling_drag_threshold = 9;
+	config->primary_selection = true;
 
-	config->smart_gaps = false;
+	config->smart_gaps = SMART_GAPS_OFF;
 	config->gaps_inner = 0;
 	config->gaps_outer.top = 0;
 	config->gaps_outer.right = 0;
@@ -291,6 +299,8 @@ static void config_defaults(struct sway_config *config) {
 	config->hide_edge_borders = E_NONE;
 	config->hide_edge_borders_smart = ESMART_OFF;
 	config->hide_lone_tab = false;
+
+	config->has_focused_tab_title = false;
 
 	// border colors
 	color_to_rgba(config->border_colors.focused.border, 0x4C7899FF);
@@ -355,12 +365,14 @@ static char *config_path(const char *prefix, const char *config_folder) {
 static char *get_config_path(void) {
 	char *path = NULL;
 	const char *home = getenv("HOME");
-	size_t size_fallback = 1 + strlen(home) + strlen("/.config");
-	char *config_home_fallback = calloc(size_fallback, sizeof(char));
-	snprintf(config_home_fallback, size_fallback, "%s/.config", home);
+	char *config_home_fallback = NULL;
 
 	const char *config_home = getenv("XDG_CONFIG_HOME");
-	if (config_home == NULL || config_home[0] == '\0') {
+	if ((config_home == NULL || config_home[0] == '\0') && home != NULL) {
+		size_t size_fallback = 1 + strlen(home) + strlen("/.config");
+		config_home_fallback = calloc(size_fallback, sizeof(char));
+		if (config_home_fallback != NULL)
+			snprintf(config_home_fallback, size_fallback, "%s/.config", home);
 		config_home = config_home_fallback;
 	}
 
@@ -539,6 +551,9 @@ bool load_main_config(const char *file, bool is_active, bool validating) {
 		config = old_config;
 		return success;
 	}
+
+	// Only really necessary if not explicitly `font` is set in the config.
+	config_update_font_height();
 
 	if (is_active && !validating) {
 		input_manager_verify_fallback_seat();
@@ -990,31 +1005,11 @@ int workspace_output_cmp_workspace(const void *a, const void *b) {
 	return lenient_strcmp(wsa->workspace, wsb->workspace);
 }
 
-static void find_font_height_iterator(struct sway_container *con, void *data) {
-	size_t amount_below_baseline = con->title_height - con->title_baseline;
-	size_t extended_height = config->font_baseline + amount_below_baseline;
-	if (extended_height > config->font_height) {
-		config->font_height = extended_height;
-	}
-}
 
-static void find_baseline_iterator(struct sway_container *con, void *data) {
-	bool *recalculate = data;
-	if (*recalculate) {
-		container_calculate_title_height(con);
-	}
-	if (con->title_baseline > config->font_baseline) {
-		config->font_baseline = con->title_baseline;
-	}
-}
+void config_update_font_height(void) {
+	int prev_max_height = config->font_height;
 
-void config_update_font_height(bool recalculate) {
-	size_t prev_max_height = config->font_height;
-	config->font_height = 0;
-	config->font_baseline = 0;
-
-	root_for_each_container(find_baseline_iterator, &recalculate);
-	root_for_each_container(find_font_height_iterator, NULL);
+	get_text_metrics(config->font_description, &config->font_height, &config->font_baseline);
 
 	if (config->font_height != prev_max_height) {
 		arrange_root();

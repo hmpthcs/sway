@@ -1,8 +1,7 @@
 #ifndef _SWAY_LAYERS_H
 #define _SWAY_LAYERS_H
 #include <stdbool.h>
-#include <wlr/types/wlr_box.h>
-#include <wlr/types/wlr_surface.h>
+#include <wlr/types/wlr_compositor.h>
 #include <wlr/types/wlr_layer_shell_v1.h>
 
 enum layer_parent {
@@ -23,7 +22,11 @@ struct sway_layer_surface {
 	struct wl_listener new_subsurface;
 
 	struct wlr_box geo;
+	bool mapped;
+	struct wlr_box extent;
 	enum zwlr_layer_shell_v1_layer layer;
+
+	struct wl_list subsurfaces;
 };
 
 struct sway_layer_popup {
@@ -43,6 +46,7 @@ struct sway_layer_popup {
 struct sway_layer_subsurface {
 	struct wlr_subsurface *wlr_subsurface;
 	struct sway_layer_surface *layer_surface;
+	struct wl_list link;
 
 	struct wl_listener map;
 	struct wl_listener unmap;

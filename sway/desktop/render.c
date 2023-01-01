@@ -1,19 +1,17 @@
 #define _POSIX_C_SOURCE 200809L
 #include <assert.h>
-#include <GLES2/gl2.h>
 #include <stdlib.h>
 #include <strings.h>
 #include <time.h>
 #include <wayland-server-core.h>
-#include <wlr/render/gles2.h>
+#include <wlr/config.h>
 #include <wlr/render/wlr_renderer.h>
-#include <wlr/types/wlr_box.h>
 #include <wlr/types/wlr_buffer.h>
+#include <wlr/types/wlr_damage_ring.h>
 #include <wlr/types/wlr_matrix.h>
-#include <wlr/types/wlr_output_damage.h>
 #include <wlr/types/wlr_output_layout.h>
 #include <wlr/types/wlr_output.h>
-#include <wlr/types/wlr_surface.h>
+#include <wlr/types/wlr_compositor.h>
 #include <wlr/util/region.h>
 #include "log.h"
 #include "config.h"
@@ -28,6 +26,10 @@
 #include "sway/tree/root.h"
 #include "sway/tree/view.h"
 #include "sway/tree/workspace.h"
+
+#if WLR_HAS_GLES2_RENDERER
+#include <wlr/render/gles2.h>
+#endif
 
 struct render_data {
 	pixman_region32_t *damage;
@@ -53,7 +55,7 @@ static int scale_length(int length, int offset, float scale) {
 
 static void scissor_output(struct wlr_output *wlr_output,
 		pixman_box32_t *rect) {
-	struct wlr_renderer *renderer = wlr_backend_get_renderer(wlr_output->backend);
+	struct wlr_renderer *renderer = wlr_output->renderer;
 	assert(renderer);
 
 	struct wlr_box box = {
@@ -75,6 +77,7 @@ static void scissor_output(struct wlr_output *wlr_output,
 
 static void set_scale_filter(struct wlr_output *wlr_output,
 		struct wlr_texture *texture, enum scale_filter_mode scale_filter) {
+#if WLR_HAS_GLES2_RENDERER
 	if (!wlr_texture_is_gles2(texture)) {
 		return;
 	}
@@ -95,14 +98,14 @@ static void set_scale_filter(struct wlr_output *wlr_output,
 	case SCALE_FILTER_SMART:
 		assert(false); // unreachable
 	}
+#endif
 }
 
 static void render_texture(struct wlr_output *wlr_output,
 		pixman_region32_t *output_damage, struct wlr_texture *texture,
 		const struct wlr_fbox *src_box, const struct wlr_box *dst_box,
 		const float matrix[static 9], float alpha) {
-	struct wlr_renderer *renderer =
-		wlr_backend_get_renderer(wlr_output->backend);
+	struct wlr_renderer *renderer = wlr_output->renderer;
 	struct sway_output *output = wlr_output->data;
 
 	pixman_region32_t damage;
@@ -219,8 +222,7 @@ void render_rect(struct sway_output *output,
 		pixman_region32_t *output_damage, const struct wlr_box *_box,
 		float color[static 4]) {
 	struct wlr_output *wlr_output = output->wlr_output;
-	struct wlr_renderer *renderer =
-		wlr_backend_get_renderer(wlr_output->backend);
+	struct wlr_renderer *renderer = wlr_output->renderer;
 
 	struct wlr_box box;
 	memcpy(&box, _box, sizeof(struct wlr_box));
@@ -475,9 +477,10 @@ static void render_titlebar(struct sway_output *output,
 	int ob_marks_x = 0; // output-buffer-local
 	int ob_marks_width = 0; // output-buffer-local
 	if (config->show_marks && marks_texture) {
-		struct wlr_box texture_box;
-		wlr_texture_get_size(marks_texture,
-			&texture_box.width, &texture_box.height);
+		struct wlr_box texture_box = {
+			.width = marks_texture->width,
+			.height = marks_texture->height,
+		};
 		ob_marks_width = texture_box.width;
 
 		// The marks texture might be shorter than the config->font_height, in
@@ -528,9 +531,10 @@ static void render_titlebar(struct sway_output *output,
 	int ob_title_x = 0;  // output-buffer-local
 	int ob_title_width = 0; // output-buffer-local
 	if (title_texture) {
-		struct wlr_box texture_box;
-		wlr_texture_get_size(title_texture,
-			&texture_box.width, &texture_box.height);
+		struct wlr_box texture_box = {
+			.width = title_texture->width,
+			.height = title_texture->height,
+		};
 
 		// The effective output may be NULL when con is not on any output.
 		// This can happen because we render all children of containers,
@@ -543,8 +547,7 @@ static void render_titlebar(struct sway_output *output,
 
 		// The title texture might be shorter than the config->font_height,
 		// in which case we need to pad it above and below.
-		int ob_padding_above = round((config->font_baseline -
-					con->title_baseline + titlebar_v_padding -
+		int ob_padding_above = round((titlebar_v_padding -
 					titlebar_border_thickness) * output_scale);
 		int ob_padding_below = ob_bg_height - ob_padding_above -
 			texture_box.height;
@@ -790,6 +793,14 @@ static void render_containers_linear(struct sway_output *output,
 	}
 }
 
+static bool container_is_focused(struct sway_container *con, void *data) {
+	return con->current.focused;
+}
+
+static bool container_has_focused_child(struct sway_container *con) {
+	return container_find_child(con, container_is_focused, NULL);
+}
+
 /**
  * Render a container's children using the L_TABBED layout.
  */
@@ -821,6 +832,10 @@ static void render_containers_tabbed(struct sway_output *output,
 			colors = &config->border_colors.focused;
 			title_texture = child->title_focused;
 			marks_texture = child->marks_focused;
+		} else if (config->has_focused_tab_title && container_has_focused_child(child)) {
+			colors = &config->border_colors.focused_tab_title;
+			title_texture = child->title_focused_tab_title;
+			marks_texture = child->marks_focused_tab_title;
 		} else if (child == parent->active_child) {
 			colors = &config->border_colors.focused_inactive;
 			title_texture = child->title_focused_inactive;
@@ -895,7 +910,11 @@ static void render_containers_stacked(struct sway_output *output,
 			colors = &config->border_colors.focused;
 			title_texture = child->title_focused;
 			marks_texture = child->marks_focused;
-		} else if (child == parent->active_child) {
+		} else if (config->has_focused_tab_title && container_has_focused_child(child)) {
+			colors = &config->border_colors.focused_tab_title;
+			title_texture = child->title_focused_tab_title;
+			marks_texture = child->marks_focused_tab_title;
+		 } else if (child == parent->active_child) {
 			colors = &config->border_colors.focused_inactive;
 			title_texture = child->title_focused_inactive;
 			marks_texture = child->marks_focused_inactive;
@@ -1066,13 +1085,7 @@ static void render_seatops(struct sway_output *output,
 void output_render(struct sway_output *output, struct timespec *when,
 		pixman_region32_t *damage) {
 	struct wlr_output *wlr_output = output->wlr_output;
-
-	struct wlr_renderer *renderer =
-		wlr_backend_get_renderer(wlr_output->backend);
-	if (!sway_assert(renderer != NULL,
-			"expected the output backend to have a renderer")) {
-		return;
-	}
+	struct wlr_renderer *renderer = output->server->renderer;
 
 	struct sway_workspace *workspace = output->current.active_workspace;
 	if (workspace == NULL) {
@@ -1086,6 +1099,12 @@ void output_render(struct sway_output *output, struct timespec *when,
 
 	wlr_renderer_begin(renderer, wlr_output->width, wlr_output->height);
 
+	if (debug.damage == DAMAGE_RERENDER) {
+		int width, height;
+		wlr_output_transformed_resolution(wlr_output, &width, &height);
+		pixman_region32_union_rect(damage, damage, 0, 0, width, height);
+	}
+
 	if (!pixman_region32_not_empty(damage)) {
 		// Output isn't damaged but needs buffer swap
 		goto renderer_end;
@@ -1093,10 +1112,41 @@ void output_render(struct sway_output *output, struct timespec *when,
 
 	if (debug.damage == DAMAGE_HIGHLIGHT) {
 		wlr_renderer_clear(renderer, (float[]){1, 1, 0, 1});
-	} else if (debug.damage == DAMAGE_RERENDER) {
-		int width, height;
-		wlr_output_transformed_resolution(wlr_output, &width, &height);
-		pixman_region32_union_rect(damage, damage, 0, 0, width, height);
+	}
+
+	if (server.session_lock.locked) {
+		float clear_color[] = {0.0f, 0.0f, 0.0f, 1.0f};
+		if (server.session_lock.lock == NULL) {
+			// abandoned lock -> red BG
+			clear_color[0] = 1.f;
+		}
+		int nrects;
+		pixman_box32_t *rects = pixman_region32_rectangles(damage, &nrects);
+		for (int i = 0; i < nrects; ++i) {
+			scissor_output(wlr_output, &rects[i]);
+			wlr_renderer_clear(renderer, clear_color);
+		}
+
+		if (server.session_lock.lock != NULL) {
+			struct render_data data = {
+				.damage = damage,
+				.alpha = 1.0f,
+			};
+
+			struct wlr_session_lock_surface_v1 *lock_surface;
+			wl_list_for_each(lock_surface, &server.session_lock.lock->surfaces, link) {
+				if (lock_surface->output != wlr_output) {
+					continue;
+				}
+				if (!lock_surface->mapped) {
+					continue;
+				}
+
+				output_surface_for_each_surface(output, lock_surface->surface,
+					0.0, 0.0, render_surface_iterator, &data);
+			}
+		}
+		goto renderer_end;
 	}
 
 	if (output_has_opaque_overlay_layer_surface(output)) {
@@ -1194,10 +1244,10 @@ renderer_end:
 
 	enum wl_output_transform transform =
 		wlr_output_transform_invert(wlr_output->transform);
-	wlr_region_transform(&frame_damage, &output->damage->current,
+	wlr_region_transform(&frame_damage, &output->damage_ring.current,
 		transform, width, height);
 
-	if (debug.damage == DAMAGE_HIGHLIGHT) {
+	if (debug.damage != DAMAGE_DEFAULT) {
 		pixman_region32_union_rect(&frame_damage, &frame_damage,
 			0, 0, wlr_output->width, wlr_output->height);
 	}
@@ -1208,5 +1258,7 @@ renderer_end:
 	if (!wlr_output_commit(wlr_output)) {
 		return;
 	}
+
+	wlr_damage_ring_rotate(&output->damage_ring);
 	output->last_frame = *when;
 }

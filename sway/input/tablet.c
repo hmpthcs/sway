@@ -1,6 +1,6 @@
 #define _POSIX_C_SOURCE 200809L
 #include <stdlib.h>
-#include <wlr/backend/libinput.h>
+#include <wlr/config.h>
 #include <wlr/types/wlr_tablet_v2.h>
 #include <wlr/types/wlr_tablet_tool.h>
 #include <wlr/types/wlr_tablet_pad.h>
@@ -8,6 +8,10 @@
 #include "sway/input/cursor.h"
 #include "sway/input/seat.h"
 #include "sway/input/tablet.h"
+
+#if WLR_HAS_LIBINPUT_BACKEND
+#include <wlr/backend/libinput.h>
+#endif
 
 static void handle_pad_tablet_destroy(struct wl_listener *listener, void *data) {
 	struct sway_tablet_pad *pad =
@@ -63,6 +67,7 @@ void sway_configure_tablet(struct sway_tablet *tablet) {
 			wlr_tablet_create(server.tablet_v2, seat->wlr_seat, device);
 	}
 
+#if WLR_HAS_LIBINPUT_BACKEND
 	/* Search for a sibling tablet pad */
 	if (!wlr_input_device_is_libinput(device)) {
 		/* We can only do this on libinput devices */
@@ -87,6 +92,7 @@ void sway_configure_tablet(struct sway_tablet *tablet) {
 			break;
 		}
 	}
+#endif
 }
 
 void sway_tablet_destroy(struct sway_tablet *tablet) {
@@ -196,7 +202,7 @@ static void handle_tablet_pad_attach(struct wl_listener *listener,
 
 static void handle_tablet_pad_ring(struct wl_listener *listener, void *data) {
 	struct sway_tablet_pad *pad = wl_container_of(listener, pad, ring);
-	struct wlr_event_tablet_pad_ring *event = data;
+	struct wlr_tablet_pad_ring_event *event = data;
 
 	if (!pad->current_surface) {
 		return;
@@ -210,7 +216,7 @@ static void handle_tablet_pad_ring(struct wl_listener *listener, void *data) {
 
 static void handle_tablet_pad_strip(struct wl_listener *listener, void *data) {
 	struct sway_tablet_pad *pad = wl_container_of(listener, pad, strip);
-	struct wlr_event_tablet_pad_strip *event = data;
+	struct wlr_tablet_pad_strip_event *event = data;
 
 	if (!pad->current_surface) {
 		return;
@@ -224,7 +230,7 @@ static void handle_tablet_pad_strip(struct wl_listener *listener, void *data) {
 
 static void handle_tablet_pad_button(struct wl_listener *listener, void *data) {
 	struct sway_tablet_pad *pad = wl_container_of(listener, pad, button);
-	struct wlr_event_tablet_pad_button *event = data;
+	struct wlr_tablet_pad_button_event *event = data;
 
 	if (!pad->current_surface) {
 		return;
@@ -246,6 +252,7 @@ struct sway_tablet_pad *sway_tablet_pad_create(struct sway_seat *seat,
 		return NULL;
 	}
 
+	tablet_pad->wlr = wlr_tablet_pad_from_input_device(device->input_device->wlr_device);
 	tablet_pad->seat_device = device;
 	wl_list_init(&tablet_pad->attach.link);
 	wl_list_init(&tablet_pad->button.link);
@@ -260,40 +267,41 @@ struct sway_tablet_pad *sway_tablet_pad_create(struct sway_seat *seat,
 }
 
 void sway_configure_tablet_pad(struct sway_tablet_pad *tablet_pad) {
-	struct wlr_input_device *device =
+	struct wlr_input_device *wlr_device =
 		tablet_pad->seat_device->input_device->wlr_device;
 	struct sway_seat *seat = tablet_pad->seat_device->sway_seat;
 
 	if (!tablet_pad->tablet_v2_pad) {
 		tablet_pad->tablet_v2_pad =
-			wlr_tablet_pad_create(server.tablet_v2, seat->wlr_seat, device);
+			wlr_tablet_pad_create(server.tablet_v2, seat->wlr_seat, wlr_device);
 	}
 
 	wl_list_remove(&tablet_pad->attach.link);
 	tablet_pad->attach.notify = handle_tablet_pad_attach;
-	wl_signal_add(&device->tablet_pad->events.attach_tablet,
+	wl_signal_add(&tablet_pad->wlr->events.attach_tablet,
 		&tablet_pad->attach);
 
 	wl_list_remove(&tablet_pad->button.link);
 	tablet_pad->button.notify = handle_tablet_pad_button;
-	wl_signal_add(&device->tablet_pad->events.button, &tablet_pad->button);
+	wl_signal_add(&tablet_pad->wlr->events.button, &tablet_pad->button);
 
 	wl_list_remove(&tablet_pad->strip.link);
 	tablet_pad->strip.notify = handle_tablet_pad_strip;
-	wl_signal_add(&device->tablet_pad->events.strip, &tablet_pad->strip);
+	wl_signal_add(&tablet_pad->wlr->events.strip, &tablet_pad->strip);
 
 	wl_list_remove(&tablet_pad->ring.link);
 	tablet_pad->ring.notify = handle_tablet_pad_ring;
-	wl_signal_add(&device->tablet_pad->events.ring, &tablet_pad->ring);
+	wl_signal_add(&tablet_pad->wlr->events.ring, &tablet_pad->ring);
 
+#if WLR_HAS_LIBINPUT_BACKEND
 	/* Search for a sibling tablet */
-	if (!wlr_input_device_is_libinput(device)) {
+	if (!wlr_input_device_is_libinput(wlr_device)) {
 		/* We can only do this on libinput devices */
 		return;
 	}
 
 	struct libinput_device_group *group =
-		libinput_device_get_device_group(wlr_libinput_get_device_handle(device));
+		libinput_device_get_device_group(wlr_libinput_get_device_handle(wlr_device));
 	struct sway_tablet *tool;
 	wl_list_for_each(tool, &seat->cursor->tablets, link) {
 		struct wlr_input_device *tablet =
@@ -310,6 +318,7 @@ void sway_configure_tablet_pad(struct sway_tablet_pad *tablet_pad) {
 			break;
 		}
 	}
+#endif
 }
 
 void sway_tablet_pad_destroy(struct sway_tablet_pad *tablet_pad) {

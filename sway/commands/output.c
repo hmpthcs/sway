@@ -15,8 +15,11 @@ static const struct cmd_handler output_handlers[] = {
 	{ "enable", output_cmd_enable },
 	{ "max_render_time", output_cmd_max_render_time },
 	{ "mode", output_cmd_mode },
+	{ "modeline", output_cmd_modeline },
 	{ "pos", output_cmd_position },
 	{ "position", output_cmd_position },
+	{ "power", output_cmd_power },
+	{ "render_bit_depth", output_cmd_render_bit_depth },
 	{ "res", output_cmd_mode },
 	{ "resolution", output_cmd_mode },
 	{ "scale", output_cmd_scale },
@@ -24,6 +27,7 @@ static const struct cmd_handler output_handlers[] = {
 	{ "subpixel", output_cmd_subpixel },
 	{ "toggle", output_cmd_toggle },
 	{ "transform", output_cmd_transform },
+	{ "unplug", output_cmd_unplug },
 };
 
 struct cmd_results *cmd_output(int argc, char **argv) {
@@ -32,9 +36,9 @@ struct cmd_results *cmd_output(int argc, char **argv) {
 		return error;
 	}
 
-	// The NOOP-1 output is a dummy output used when there's no outputs
+	// The HEADLESS-1 output is a dummy output used when there's no outputs
 	// connected. It should never be configured.
-	if (strcasecmp(argv[0], root->noop_output->wlr_output->name) == 0) {
+	if (strcasecmp(argv[0], root->fallback_output->wlr_output->name) == 0) {
 		return cmd_results_new(CMD_FAILURE,
 				"Refusing to configure the no op output");
 	}
@@ -51,7 +55,7 @@ struct cmd_results *cmd_output(int argc, char **argv) {
 		if (!sway_output) {
 			return cmd_results_new(CMD_FAILURE, "Unknown output");
 		}
-		if (sway_output == root->noop_output) {
+		if (sway_output == root->fallback_output) {
 			return cmd_results_new(CMD_FAILURE,
 					"Refusing to configure the no op output");
 		}

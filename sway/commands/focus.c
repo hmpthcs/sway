@@ -54,7 +54,7 @@ static bool get_direction_from_next_prev(struct sway_container *container,
 	} else {
 		return false;
 	}
-	 
+
 	return true;
 }
 
@@ -267,6 +267,11 @@ static struct cmd_results *focus_mode(struct sway_workspace *ws,
 		new_focus = seat_get_focus_inactive_tiling(seat, ws);
 	}
 	if (new_focus) {
+		struct sway_container *new_focus_view =
+			seat_get_focus_inactive_view(seat, &new_focus->node);
+		if (new_focus_view) {
+			new_focus = new_focus_view;
+		}
 		seat_set_focus_container(seat, new_focus);
 
 		// If we're on the floating layer and the floating container area
@@ -280,7 +285,7 @@ static struct cmd_results *focus_mode(struct sway_workspace *ws,
 		}
 	} else {
 		return cmd_results_new(CMD_FAILURE,
-				"Failed to find a %s container in workspace",
+				"Failed to find a %s container in workspace.",
 				floating ? "floating" : "tiling");
 	}
 	return cmd_results_new(CMD_SUCCESS, NULL);
@@ -290,7 +295,7 @@ static struct cmd_results *focus_output(struct sway_seat *seat,
 		int argc, char **argv) {
 	if (!argc) {
 		return cmd_results_new(CMD_INVALID,
-			"Expected 'focus output <direction|name>'");
+			"Expected 'focus output <direction|name>'.");
 	}
 	char *identifier = join_args(argv, argc);
 	struct sway_output *output = output_by_name_or_id(identifier);
@@ -300,13 +305,13 @@ static struct cmd_results *focus_output(struct sway_seat *seat,
 		if (!parse_direction(identifier, &direction)) {
 			free(identifier);
 			return cmd_results_new(CMD_INVALID,
-				"There is no output with that name");
+				"There is no output with that name.");
 		}
 		struct sway_workspace *ws = seat_get_focused_workspace(seat);
 		if (!ws) {
 			free(identifier);
 			return cmd_results_new(CMD_FAILURE,
-				"No focused workspace to base directions off of");
+				"No focused workspace to base directions off of.");
 		}
 		output = output_get_in_direction(ws->output, direction);
 
@@ -370,10 +375,14 @@ struct cmd_results *cmd_focus(int argc, char **argv) {
 	struct sway_seat *seat = config->handler_context.seat;
 	if (node->type < N_WORKSPACE) {
 		return cmd_results_new(CMD_FAILURE,
-			"Command 'focus' cannot be used above the workspace level");
+			"Command 'focus' cannot be used above the workspace level.");
 	}
 
-	if (argc == 0 && container) {
+	if (argc == 0) {
+		if (!container) {
+			return cmd_results_new(CMD_FAILURE, "No container to focus was specified.");
+		}
+
 		if (container_is_scratchpad_hidden_or_child(container)) {
 			root_scratchpad_show(container);
 		}
@@ -446,7 +455,8 @@ struct cmd_results *cmd_focus(int argc, char **argv) {
 		return cmd_results_new(CMD_FAILURE, "");
 	}
 	struct sway_node *next_focus = NULL;
-	if (container_is_floating(container)) {
+	if (container_is_floating(container) &&
+			container->pending.fullscreen_mode == FULLSCREEN_NONE) {
 		next_focus = node_get_in_direction_floating(container, seat, direction);
 	} else {
 		next_focus = node_get_in_direction_tiling(container, seat, direction, descend);
