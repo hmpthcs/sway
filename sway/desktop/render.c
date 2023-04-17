@@ -779,12 +779,12 @@ static void render_containers_linear(struct sway_output *output,
 				render_top_border(output, damage, child, colors);
 			}
 			render_view(output, damage, child, colors);
-				if (config->titlebar_position != TITLEBAR_BOTTOM) {
+			if (config->titlebar_position != TITLEBAR_BOTTOM) {
 				render_bottom_border(output, damage, child, colors);
-				} else {
-				render_top_border(output, damage, child, colors);
-				}
 			} else {
+				render_top_border(output, damage, child, colors);
+			}
+		} else {
 			render_container(output, damage, child,
 					parent->focused || child->current.focused);
 		}
@@ -930,7 +930,7 @@ static void render_containers_stacked(struct sway_output *output,
 		render_titlebar(output, damage, child, parent->box.x,
 				titlebar_y, parent->box.width, colors, title_texture,
 			   	marks_texture);
-		
+
 		if (child == current) {
 			current_colors = colors;
 		}
