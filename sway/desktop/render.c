@@ -689,12 +689,11 @@ static void render_top_border(struct sway_output *output,
 	scale_box(&box, output_scale);
 	render_rect(output, output_damage, &box, color);
 }
-
 /**
  * Render the bottom border line for a view using "border pixel".
  */
 static void render_bottom_border(struct sway_output *output,
-		pixman_region32_t *output_damage, struct sway_container *con,
+		const pixman_region32_t *output_damage, struct sway_container *con,
 		struct border_colors *colors) {
 	struct sway_container_state *state = &con->current;
 	if (!state->border_bottom) {
@@ -721,7 +720,6 @@ static void render_bottom_border(struct sway_output *output,
 	scale_box(&box, output_scale);
 	render_rect(output, output_damage, &box, color);
 }
-
 struct parent_data {
 	enum sway_container_layout layout;
 	struct wlr_box box;
@@ -781,12 +779,12 @@ static void render_containers_linear(struct sway_output *output,
 				render_top_border(output, damage, child, colors);
 			}
 			render_view(output, damage, child, colors);
-			if (config->titlebar_position != TITLEBAR_BOTTOM) {
+				if (config->titlebar_position != TITLEBAR_BOTTOM) {
 				render_bottom_border(output, damage, child, colors);
-			} else {
+				} else {
 				render_top_border(output, damage, child, colors);
-			}
-		} else {
+				}
+			} else {
 			render_container(output, damage, child,
 					parent->focused || child->current.focused);
 		}
@@ -856,7 +854,7 @@ static void render_containers_tabbed(struct sway_output *output,
 		if (config->titlebar_position == TITLEBAR_BOTTOM) {
 			y += parent->box.height - container_titlebar_height();
 		}
-		render_titlebar(output, damage, child, x, y, tab_width,
+		render_titlebar(output, damage, child, x, parent->box.y, tab_width,
 				colors, title_texture, marks_texture);
 
 		if (child == current) {
@@ -926,12 +924,13 @@ static void render_containers_stacked(struct sway_output *output,
 
 		int titlebar_y = parent->box.y + titlebar_height * i;
 		if (!titlebar_is_on_top) {
-			titlebar_y = parent->box.height - titlebar_height * (parent->children->length - i) - (child->pending.border_thickness * child->pending.border_bottom);
+			titlebar_y = parent->box.height - titlebar_height * (parent->children->length - i) - (child->pending.border_thickness * 
+			child->pending.border_bottom);
 		}
 		render_titlebar(output, damage, child, parent->box.x,
 				titlebar_y, parent->box.width, colors, title_texture,
 			   	marks_texture);
-
+		
 		if (child == current) {
 			current_colors = colors;
 		}
