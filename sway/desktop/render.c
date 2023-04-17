@@ -924,8 +924,7 @@ static void render_containers_stacked(struct sway_output *output,
 
 		int titlebar_y = parent->box.y + titlebar_height * i;
 		if (!titlebar_is_on_top) {
-			titlebar_y = parent->box.height - titlebar_height * (parent->children->length - i) - (child->pending.border_thickness * 
-			child->pending.border_bottom);
+			titlebar_y = parent->box.height - titlebar_height * (parent->children->length - i) - (child->pending.border_thickness * child->pending.border_bottom);
 		}
 		render_titlebar(output, damage, child, parent->box.x,
 				titlebar_y, parent->box.width, colors, title_texture,
